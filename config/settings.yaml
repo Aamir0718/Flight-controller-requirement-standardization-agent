@@ -1,0 +1,37 @@
+# Central configuration for the requirements-engineering agent.
+# Nothing model-specific or environment-specific should be hardcoded
+# in application code — read it from here via src/config.py instead.
+
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama3.1"          # config value only, never hardcoded elsewhere
+  request_timeout_seconds: 120
+  temperature: 0.2
+
+storage:
+  sqlite_path: "data/app.db"
+
+ingestion:
+  input_dir: "data/incoming"
+  reference_dir: "data/reference"
+  golden_dir: "data/golden"
+  # Junk/note-row heuristic: a cell must clear this word count AND
+  # contain a recognizable verb to be treated as candidate requirement text.
+  min_word_count: 4
+
+pipeline:
+  candidates_per_requirement: 3
+  max_words_per_requirement: 60
+  # Minimum INCOSE compliance score (0-100, from src/rules/incose_scorer.py)
+  # the best candidate must reach before Finalize will present it as a
+  # recommendation instead of setting needs_human_review = true.
+  compliance_threshold: 80.0
+
+ui:
+  api_host: "0.0.0.0"
+  api_port: 8000
+  streamlit_port: 8501
+
+logging:
+  level: "INFO"

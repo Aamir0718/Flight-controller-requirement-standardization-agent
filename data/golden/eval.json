@@ -1,0 +1,602 @@
+[
+  {
+    "id": "EMBEDDED-REQ-IOT-073",
+    "ears_pattern": "State-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "While in low-power state, the MCU shall minimize its active peripheral blocks.",
+    "reason": "'Minimize' does not explicitly define which peripheral blocks must be deactivated.",
+    "compliant_version": "While in low-power state, the MCU shall disable all peripheral blocks except External Interrupt 0.",
+    "python_detectable": true,
+    "detection_method": "Flags broad minimization verbs applied to internal hardware layout control."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-055",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Non-Standard Syntax/Vocabulary",
+    "bad_requirement": "When local memory boundaries fill up, the data logger shall toss out old records.",
+    "reason": "Uses imprecise, uncalibrated language ('toss out') instead of specifying definitive data buffer eviction mechanics.",
+    "compliant_version": "When local memory boundaries fill up, the data logger shall overwrite the oldest data record following a FIFO scheme.",
+    "python_detectable": true,
+    "detection_method": "Flags non-standard colloquial action terms ('toss out', 'dump', 'kill', 'throw')."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-080",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "Where a backup battery is present, the subsystem shall charge it optimally.",
+    "reason": "'Optimally' is a qualitative term that cannot be evaluated objectively without a specified charging profile.",
+    "compliant_version": "Where a backup battery is present, the subsystem shall charge it following the CC-CV profile specified in Document B12.",
+    "python_detectable": true,
+    "detection_method": "Flags efficiency/methodological adverbs ('optimally') lacking an external document link or spec."
+  },
+  {
+    "id": "EX50-37",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-066",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Vagueness",
+    "bad_requirement": "The smart meter gateway shall transmit power usage logs periodically.",
+    "reason": "'Periodically' is unmeasurable without defining a specific numerical reporting frequency.",
+    "compliant_version": "The smart meter gateway shall transmit power usage logs every 15 minutes.",
+    "python_detectable": true,
+    "detection_method": "Flags non-specific temporal transmission intervals across data communication loops."
+  },
+  {
+    "id": "EX50-21",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Ubiquity",
+    "bad_requirement": "When power is applied, the software shall initialize quickly.",
+    "reason": "Ambiguous term 'quickly'",
+    "compliant_version": "When power is applied, the software shall initialize within 2 s.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-047",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "Where military combat mode is deselected, the weapons management system shall arm the external wing missile rails.",
+    "reason": "Operational mode mismatch: attempts to execute combat deployment behaviors when the feature is explicitly deselected.",
+    "compliant_version": "Where military combat mode is selected, the weapons management system shall arm the external wing missile rails.",
+    "python_detectable": true,
+    "detection_method": "Catches logical contradictions where a negative activation trigger drives a positive action item."
+  },
+  {
+    "id": "EX50-32",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EMBEDDED-REQ-AUT-008",
+    "ears_pattern": "State-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "While in Eco Mode, the HVAC shall minimize current draw from the main battery.",
+    "reason": "'Minimize' is an unbounded optimization goal. A specific upper boundary is required for testability.",
+    "compliant_version": "While in Eco Mode, the HVAC shall limit current draw from the main battery to a maximum of 5.0 Amperes.",
+    "python_detectable": true,
+    "detection_method": "Checks for optimization verbs ('minimize', 'maximize') without absolute conditional constraints."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-068",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Passive Voice / Missing Actor",
+    "bad_requirement": "If a database sector corruption is found, an error log shall be written to non-volatile flash memory.",
+    "reason": "Fails to name the diagnostic manager responsible for capturing, formatting, and executing the non-volatile write cycle.",
+    "compliant_version": "If a database sector corruption is found, the memory supervisor shall write an error log to non-volatile flash memory.",
+    "python_detectable": true,
+    "detection_method": "Flags passive error handling routines that hide the active fault manager."
+  },
+  {
+    "id": "EX50-12",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-018",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Non-Atomic Multiple Behaviors",
+    "bad_requirement": "When landing gear is commanded down, the controller shall extend the nose gear and drop the main assemblies.",
+    "reason": "Combines nose gear actuation loops and main gear hydraulic timings into a single, complex compound sentence.",
+    "compliant_version": "When landing gear is commanded down, the controller shall initiate extension of the nose gear assembly.",
+    "python_detectable": true,
+    "detection_method": "Analyzes the syntax tree for multiple predicate clauses succeeding the main verb."
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-058",
+    "ears_pattern": "State-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "While in terminal descent, the radar altimeter shall track ground elevation accurately.",
+    "reason": "'Accurately' is a qualitative concept without a defined measurement tolerance or variance.",
+    "compliant_version": "While in terminal descent, the radar altimeter shall track ground elevation with a maximum error of +/- 0.5 meters.",
+    "python_detectable": true,
+    "detection_method": "Flags validation adverbs ('accurately', 'precisely') lacking specific engineering ranges."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-039",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "When the pilot selects manual steering mode, the autopilot shall maintain full directional control of the aircraft.",
+    "reason": "Operational authority conflict: commands automated autopilot control immediately upon the initiation of manual piloting modes.",
+    "compliant_version": "When the pilot selects manual steering mode, the autopilot shall disengage all servo directional control outputs.",
+    "python_detectable": true,
+    "detection_method": "Isolates conflicting control actors ('manual' vs 'autopilot') within trigger loops."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-042",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "Where structural health monitoring is active, the software shall deactivate all strain sensor strain logging channels.",
+    "reason": "Functional contradiction: tells an option to disable its own core functionality immediately upon activation.",
+    "compliant_version": "Where structural health monitoring is active, the software shall record strain sensor data channels at a minimum frequency of 50 Hz.",
+    "python_detectable": true,
+    "detection_method": "Detects feature activation parameters coupled directly to full feature deactivation words."
+  },
+  {
+    "id": "EX50-25",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Feasible",
+    "bad_requirement": "If commanded, the software shall predict all failures.",
+    "reason": "Not feasible",
+    "compliant_version": "If commanded, the software shall predict configured diagnostic faults only.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-048",
+    "ears_pattern": "State-driven",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "While in dark cockpit night configuration, the central multi-function display shall emit light at maximum possible nit levels.",
+    "reason": "Human factors/operational inconsistency: commands blinding light emissions during a designated dark-cockpit stealth night operation phase.",
+    "compliant_version": "While in dark cockpit night configuration, the central multi-function display shall limit brightness to under 5.0 nits.",
+    "python_detectable": true,
+    "detection_method": "Flags brightness/intensity adjustments that contradict night-operation configurations."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-062",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "When an emergency stop button is pressed, the PLC shall kill motor power instantly.",
+    "reason": "'Instantly' is an invalid engineering word since electrical and software delays always exist.",
+    "compliant_version": "When an emergency stop button is pressed, the PLC shall remove motor power within 2.0 milliseconds.",
+    "python_detectable": true,
+    "detection_method": "Flags instantaneous response terms inside industrial functional safety logic."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-071",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "The environmental monitor shall log ambient humidity readings accurately.",
+    "reason": "'Accurately' lacks an engineering measurement tolerance (e.g., +/- %RH).",
+    "compliant_version": "The environmental monitor shall log ambient humidity readings with a maximum error of +/- 2.0% RH.",
+    "python_detectable": true,
+    "detection_method": "Flags simple qualification adverbs appended to data logging targets."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-037",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "Where TCAS is not installed on the airframe, the processor shall compute vertical resolution advisories.",
+    "reason": "System scope conflict: directs an uninstalled, unconfigured option ('Where TCAS is not installed') to compute active metrics.",
+    "compliant_version": "Where TCAS is configured on the airframe, the processor shall compute vertical resolution advisories based on transponder inputs.",
+    "python_detectable": true,
+    "detection_method": "Flags negative precondition states ('Where X is not present') attempting positive executions."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-061",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "The industrial robot controller shall move the joint actuators smoothly.",
+    "reason": "'Smoothly' is a qualitative motion profile descriptor. It must be specified via jerk or acceleration bounds.",
+    "compliant_version": "The industrial robot controller shall limit joint actuator jerk to a maximum of 10 rad/s³.",
+    "python_detectable": true,
+    "detection_method": "Flags physical movement descriptors ('smoothly', 'gradually') lacking dynamic bounds."
+  },
+  {
+    "id": "EX50-40",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Feasible",
+    "bad_requirement": "If commanded, the software shall predict all failures.",
+    "reason": "Not feasible",
+    "compliant_version": "If commanded, the software shall predict configured diagnostic faults only.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-046",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "The autopilot software shall maintain a stable pitch angle during turbulence.",
+    "reason": "'Stable' needs explicit bounded angle error brackets relative to the commanded attitude.",
+    "compliant_version": "The autopilot software shall maintain the pitch angle within +/- 1.5 degrees of the commanded pitch angle.",
+    "python_detectable": true,
+    "detection_method": "Flags stability adjectives ('stable', 'unwavering') inside active loop controllers."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-038",
+    "ears_pattern": "State-driven",
+    "defect_type": "Structural Inconsistency",
+    "bad_requirement": "While the system operates in emergency battery power, the high-draw galley display screens shall run maximum brightness.",
+    "reason": "Electrical management mismatch: commands maximum power consumption items during a critical battery-depleted emergency state.",
+    "compliant_version": "While the system operates in emergency battery power, the high-draw galley display screens shall enter absolute power-down state.",
+    "python_detectable": true,
+    "detection_method": "Maintains power-state dictionaries; flags power-up commands written inside low-power states."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-065",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "Where a vibration sensor is integrated, the firmware shall detect bearing faults effectively.",
+    "reason": "'Effectively' is subjective. It needs to define a statistical detection probability or noise floor limit.",
+    "compliant_version": "Where a vibration sensor is integrated, the firmware shall isolate bearing faults with a probability of detection > 99%.",
+    "python_detectable": true,
+    "detection_method": "Flags diagnostic efficacy adjectives applied to predictive maintenance pipelines."
+  },
+  {
+    "id": "EX50-41",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Ubiquity",
+    "bad_requirement": "When power is applied, the software shall initialize quickly.",
+    "reason": "Ambiguous term 'quickly'",
+    "compliant_version": "When power is applied, the software shall initialize within 2 s.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EX50-2",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-022",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Non-Atomic Multiple Behaviors",
+    "bad_requirement": "The fuel indication processor shall calculate mass indices and update cockpit fuel quantity indicators.",
+    "reason": "Binds mathematical background logic (mass calculation) to visual frontend updating requirements.",
+    "compliant_version": "The fuel indication processor shall calculate mass indices based on fuel density and volume inputs.",
+    "python_detectable": true,
+    "detection_method": "Identifies processing tasks joined with communication/display functions using 'and'."
+  },
+  {
+    "id": "EMBEDDED-REQ-MED-021",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "The infusion pump firmware shall ensure the fluid delivery rate is ultra-precise.",
+    "reason": "'Ultra-precise' is an unmeasurable marketing adjective rather than an engineering specification.",
+    "compliant_version": "The infusion pump firmware shall maintain fluid delivery rate within +/- 1.5% of the target setpoint.",
+    "python_detectable": true,
+    "detection_method": "Flags hyped marketing buzzwords ('ultra-precise', 'advanced', 'next-generation')."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-065",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Passive Voice / Missing Actor",
+    "bad_requirement": "The target heading data packets shall be transmitted over the ARINC bus at a rate of 50 Hz.",
+    "reason": "Passive structure ('shall be transmitted') conceals the active software module or subsystem responsible for driving the bus.",
+    "compliant_version": "The navigation processor shall transmit the target heading data packets over the ARINC bus at a rate of 50 Hz.",
+    "python_detectable": true,
+    "detection_method": "NLP check identifying passive helper verbs ('be', 'been') combined with past participles."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-007",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "When autopilot disengagement occurs, the flight control system shall not leave trim surfaces in an un-trimmed state.",
+    "reason": "Double negative design ('not leave...un-trimmed') introduces severe ambiguity into automatic control surface positioning logic.",
+    "compliant_version": "When autopilot disengagement occurs, the flight control system shall hold the trim surfaces in their last commanded positions.",
+    "python_detectable": true,
+    "detection_method": "NLP token inspection for negative prefixes ('un-', 'in-', 'dis-') tied to negative verbs."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-058",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Non-Standard Syntax/Vocabulary",
+    "bad_requirement": "Where a cabin lighting controller is installed, passengers shall get a pretty lighting show.",
+    "reason": "Subjective aesthetic language ('pretty lighting show') is completely invalid for a rigorous embedded software specification.",
+    "compliant_version": "Where a cabin lighting controller is installed, the system shall modulate LED outputs matching the dimming profile curves of Appendix C.",
+    "python_detectable": true,
+    "detection_method": "Isolates aesthetic/artistic design words ('pretty', 'beautiful', 'sleek')."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-068",
+    "ears_pattern": "State-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "While the AGV is navigating, the laser scanner shall update obstacle maps continuously.",
+    "reason": "'Continuously' cannot be implemented or proven on a digital microprocessor running a sequential task scheduler.",
+    "compliant_version": "While the AGV is navigating, the laser scanner shall update obstacle maps at a minimum rate of 20 Hz.",
+    "python_detectable": true,
+    "detection_method": "Flags continuous map generation claims within navigation algorithms."
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-050",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Subjectivity",
+    "bad_requirement": "Where a weather radar is fitted, the display shall render clear storm cells.",
+    "reason": "'Clear storm cells' does not define standard dbZ radar reflectivity thresholds or pixel resolution metrics.",
+    "compliant_version": "Where a weather radar is fitted, the display shall render radar returns exceeding 40 dBZ in red color.",
+    "python_detectable": true,
+    "detection_method": "Flags rendering or perceptual attributes ('clear', 'sharp') lacking mathematical values."
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-054",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Vagueness",
+    "bad_requirement": "If a battery cell overheats, the telemetry module shall alert ground control immediately.",
+    "reason": "'Immediately' is undefined for software telemetry queue and scheduling structures.",
+    "compliant_version": "If a battery cell temperature exceeds 55C, the telemetry module shall transmit a priority-1 alert packet within 100 milliseconds.",
+    "python_detectable": true,
+    "detection_method": "Flags temporal promptness phrases within warning dispatch blocks."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-001",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "The FADEC software shall never command a fuel flow rate above 12000 pounds per hour.",
+    "reason": "Uses 'never...above' which hides positive baseline behavior and leaves unhandled or safe recovery conditions completely unspecified.",
+    "compliant_version": "The FADEC software shall limit the fuel flow command to a maximum of 12000 pounds per hour.",
+    "python_detectable": true,
+    "detection_method": "Regex filters for 'never|cannot|no-go|avoid' interacting with numerical conditions."
+  },
+  {
+    "id": "EMBEDDED-REQ-AUT-014",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "If overvoltage occurs on the 12V rail, the DC-DC converter shall shutdown instantly.",
+    "reason": "'Instantly' implies zero time, which is physically impossible and untestable in embedded software.",
+    "compliant_version": "If voltage exceeds 16.0V on the 12V rail, the DC-DC converter shall transition to shutdown state within 2 microseconds.",
+    "python_detectable": true,
+    "detection_method": "Flags physical impossibility keywords ('instantly', 'zero latency', 'simultaneously')."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-078",
+    "ears_pattern": "State-driven",
+    "defect_type": "Lack of Precision",
+    "bad_requirement": "While in calibration mode, the robotic arm shall move at an extremely slow speed.",
+    "reason": "'Extremely slow speed' provides no quantitative velocity limits.",
+    "compliant_version": "While in calibration mode, the robotic arm shall limit its linear tip velocity to a maximum of 10 mm/s.",
+    "python_detectable": true,
+    "detection_method": "Flags double-adjective relative scale indicators ('extremely slow')."
+  },
+  {
+    "id": "EMBEDDED-REQ-MED-025",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "Where a wireless module is active, the insulin pump shall transmit dosage logs securely.",
+    "reason": "'Securely' is too broad and abstract. It must define the specific encryption standard or protocol.",
+    "compliant_version": "Where a wireless module is active, the insulin pump shall encrypt dosage logs using AES-256 before transmission.",
+    "python_detectable": true,
+    "detection_method": "Flags high-level architectural concepts used as functional attributes ('securely', 'safely')."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-080",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Passive Voice / Missing Actor",
+    "bad_requirement": "The global navigation waypoint coordinate matrices shall be updated when cross-referenced data arrives.",
+    "reason": "Passive structure hides the navigation engine component responsible for validating and parsing incoming data matrices.",
+    "compliant_version": "The navigation engine shall update the global navigation waypoint coordinate matrices when cross-referenced data arrives.",
+    "python_detectable": true,
+    "detection_method": "Identifies passive data modification statements across core navigation matrix storage blocks."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-010",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "Where real-time weather link is installed, the display processor shall never draw outdated precipitation maps.",
+    "reason": "The term 'never' creates an unbounded temporal constraint that is untestable within normal automated HIL test parameters.",
+    "compliant_version": "Where real-time weather link is installed, the display processor shall clear precipitation maps older than 5 minutes.",
+    "python_detectable": true,
+    "detection_method": "Catches temporal negatives ('never', 'at no time') inside functional blocks."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-006",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "The TCAS application software shall not issue a resolution advisory if the radio altimeter fails tracking.",
+    "reason": "Prohibits action without defining alternative flight deck states or alert escalations during sensor outages.",
+    "compliant_version": "The TCAS application software shall transition to TA-Only mode within 500 milliseconds if the radio altimeter fails tracking.",
+    "python_detectable": true,
+    "detection_method": "Flags nested conditional restrictions ('if...fails...shall not')."
+  },
+  {
+    "id": "EX50-24",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Singular",
+    "bad_requirement": "When started, the software shall initialize and display status.",
+    "reason": "Two requirements",
+    "compliant_version": "When started, the software shall initialize. When initialized, the software shall display status.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EX50-8",
+    "ears_pattern": "State-driven",
+    "defect_type": "Verifiable",
+    "bad_requirement": "While running, the software shall be user-friendly.",
+    "reason": "Not verifiable",
+    "compliant_version": "While running, the software shall respond to user input within 100 ms.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EX50-9",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Singular",
+    "bad_requirement": "When started, the software shall initialize and display status.",
+    "reason": "Two requirements",
+    "compliant_version": "When started, the software shall initialize. When initialized, the software shall display status.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-059",
+    "ears_pattern": "Ubiquitous",
+    "defect_type": "Non-Standard Syntax/Vocabulary",
+    "bad_requirement": "The internal backup clock shall keep time okay during primary electrical switch transitions.",
+    "reason": "Highly non-standard colloquial quality marker ('okay') provides no verifiable drift tolerance or timing precision values.",
+    "compliant_version": "The internal backup clock shall maintain time tracking precision within +/- 5 microseconds per hour during power switches.",
+    "python_detectable": true,
+    "detection_method": "Searches for informal quality approximations ('okay', 'ok', 'so-so', 'decent')."
+  },
+  {
+    "id": "EMBEDDED-REQ-MED-022",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Vagueness",
+    "bad_requirement": "When the ventilator sensor detects patient apnea, the system shall initiate backup ventilation fast.",
+    "reason": "'Fast' lacks a definite time dimension required for clinical safety validation.",
+    "compliant_version": "When the ventilator sensor detects patient apnea, the system shall initiate backup ventilation within 500 milliseconds.",
+    "python_detectable": true,
+    "detection_method": "Flags speed/time qualitative descriptors like 'fast', 'slow', 'rapid'."
+  },
+  {
+    "id": "EX50-23",
+    "ears_pattern": "State-driven",
+    "defect_type": "Verifiable",
+    "bad_requirement": "While running, the software shall be user-friendly.",
+    "reason": "Not verifiable",
+    "compliant_version": "While running, the software shall respond to user input within 100 ms.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EMBEDDED-REQ-AUT-010",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Subjectivity",
+    "bad_requirement": "Where heads-up display is configured, the HUD shall project clear graphics onto the windshield.",
+    "reason": "'Clear' is a subjective user-experience term that cannot be objectively verified by a test engineer.",
+    "compliant_version": "Where heads-up display is configured, the HUD shall project graphics with a minimum contrast ratio of 4:1.",
+    "python_detectable": true,
+    "detection_method": "Extracts visual/qualitative descriptors ('clear', 'bright', 'readable') using POS tagging."
+  },
+  {
+    "id": "EMBEDDED-REQ-IOT-077",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "When firmware update is initiated, the bootloader shall verify the file securely.",
+    "reason": "'Securely' must be defined by specific cryptographic verification algorithms (e.g., SHA-256 / RSA).",
+    "compliant_version": "When firmware update is initiated, the bootloader shall verify the file signature using RSA-2048.",
+    "python_detectable": true,
+    "detection_method": "Flags abstract security goals used as functional criteria in updates."
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-044",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Non-Verifiable",
+    "bad_requirement": "If GNSS spoofing is detected, the INS shall reject external data instantly.",
+    "reason": "'Instantly' cannot be mathematically mapped to discrete software processing cycles.",
+    "compliant_version": "If GNSS spoofing is detected, the INS shall isolate the GNSS input channel within 1 clock cycle.",
+    "python_detectable": true,
+    "detection_method": "Flags instantaneous execution metrics that ignore hardware timing architectures."
+  },
+  {
+    "id": "EX50-27",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-059",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Incompleteness",
+    "bad_requirement": "If a single event upset occurs, the EDAC system shall repair the data as a minimum.",
+    "reason": "'As a minimum' makes the error mitigation response open-ended, lacking full test boundaries.",
+    "compliant_version": "If a single event upset occurs, the EDAC system shall correct single-bit errors within 1 clock cycle.",
+    "python_detectable": true,
+    "detection_method": "Flags bottom-limit qualifiers ('as a minimum', 'at the very least') across correction logic."
+  },
+  {
+    "id": "EX50-36",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Ubiquity",
+    "bad_requirement": "When power is applied, the software shall initialize quickly.",
+    "reason": "Ambiguous term 'quickly'",
+    "compliant_version": "When power is applied, the software shall initialize within 2 s.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "AVIONICS-REQ-AV-008",
+    "ears_pattern": "State-driven",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "While in configuration mode, the maintenance computer shall avoid loading outdated aerodynamic coefficient tables.",
+    "reason": "Vague negative word 'avoid' provides zero hard verification limits for checking configuration file checksums or data tags.",
+    "compliant_version": "While in configuration mode, the maintenance computer shall only accept aerodynamic coefficient tables with a valid CRC-32 checksum.",
+    "python_detectable": true,
+    "detection_method": "Dictionary matches soft negative words ('avoid', 'bypass', 'sidestep')."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-013",
+    "ears_pattern": "State-driven",
+    "defect_type": "Subtle Negative Constraint",
+    "bad_requirement": "While in glideslope capture mode, the flight director shall not display erratic navigation guidance bars.",
+    "reason": "Subjective negative constraint ('not display erratic') cannot be parsed into clear, repeatable mathematical testing metrics.",
+    "compliant_version": "While in glideslope capture mode, the flight director shall display guidance bars computed via the ILS filter algorithm.",
+    "python_detectable": true,
+    "detection_method": "Isolates negative structures modifying subjective qualitative properties ('erratic', 'unstable')."
+  },
+  {
+    "id": "AVIONICS-REQ-AV-021",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Non-Atomic Multiple Behaviors",
+    "bad_requirement": "Where terrain overlay is enabled, the navigation display shall highlight mountains and compute terrain clearance levels.",
+    "reason": "Mashes display graphics formatting rules together with real-time geometric radar profile computations.",
+    "compliant_version": "Where terrain overlay is enabled, the navigation display shall render terrain heights above aircraft altitude in bright red.",
+    "python_detectable": true,
+    "detection_method": "Checks for presence of multiple target nouns and dual action items."
+  },
+  {
+    "id": "EMBEDDED-REQ-AER-060",
+    "ears_pattern": "Optional Feature",
+    "defect_type": "Subjectivity",
+    "bad_requirement": "Where a cargo door sensor is present, the cockpit display shall indicate status clearly.",
+    "reason": "'Clearly' is an unmeasurable presentation quality that is impossible to objectively test.",
+    "compliant_version": "Where a cargo door sensor is present, the cockpit display shall show a flashing red icon when the door is unlocked.",
+    "python_detectable": true,
+    "detection_method": "Flags descriptive visual clarity terms ('clearly', 'visibly') lacking behavioral specs."
+  },
+  {
+    "id": "EX50-7",
+    "ears_pattern": "Unwanted Behavior",
+    "defect_type": "Ambiguity",
+    "bad_requirement": "If data is invalid, the software shall handle it appropriately.",
+    "reason": "'appropriately' ambiguous",
+    "compliant_version": "If data is invalid, the software shall reject it and log error E101.",
+    "python_detectable": null,
+    "detection_method": null
+  },
+  {
+    "id": "EX50-29",
+    "ears_pattern": "Event-driven",
+    "defect_type": "Singular",
+    "bad_requirement": "When started, the software shall initialize and display status.",
+    "reason": "Two requirements",
+    "compliant_version": "When started, the software shall initialize. When initialized, the software shall display status.",
+    "python_detectable": null,
+    "detection_method": null
+  }
+]

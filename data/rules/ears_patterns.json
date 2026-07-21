@@ -1,0 +1,48 @@
+{
+  "source": "EARS (Easy Approach to Requirements Syntax), Mavin et al., plus this project's dataset convention",
+  "note": "Small enough to include in full in every LLM prompt.",
+  "patterns": [
+    {
+      "id": "ubiquitous",
+      "name": "Ubiquitous",
+      "trigger_keyword": null,
+      "syntax_template": "The <system name> shall <system response>.",
+      "example": "The flight control computer shall compute attitude at 50 Hz."
+    },
+    {
+      "id": "event_driven",
+      "name": "Event-driven",
+      "trigger_keyword": "When",
+      "syntax_template": "When <trigger>, the <system name> shall <system response>.",
+      "example": "When an overheat condition is detected, the FCC shall shut down the affected channel."
+    },
+    {
+      "id": "state_driven",
+      "name": "State-driven",
+      "trigger_keyword": "While",
+      "syntax_template": "While <state>, the <system name> shall <system response>.",
+      "example": "While on battery power, the system shall enter low power mode."
+    },
+    {
+      "id": "unwanted_behavior",
+      "name": "Unwanted Behavior",
+      "trigger_keyword": "If",
+      "syntax_template": "If <trigger/condition>, then the <system name> shall <system response>.",
+      "example": "If the primary sensor fails, then the software shall switch to the backup sensor."
+    },
+    {
+      "id": "optional_feature",
+      "name": "Optional Feature",
+      "trigger_keyword": "Where",
+      "syntax_template": "Where <feature is included>, the <system name> shall <system response>.",
+      "example": "Where automatic braking is selected, the autobrake controller shall modulate brake pressure based on wheel slip ratios."
+    },
+    {
+      "id": "complex",
+      "name": "Complex",
+      "trigger_keyword": null,
+      "syntax_template": "While <state>, when <trigger>, the <system name> shall <system response>. (any combination of the state-driven/event-driven/unwanted-behavior/optional-feature clauses, in that clause order, ahead of a single 'shall' response)",
+      "example": "While in autonomous approach mode, if the primary altimeter fails, the flight control computer shall transition to the backup altimeter within 200 milliseconds."
+    }
+  ]
+}

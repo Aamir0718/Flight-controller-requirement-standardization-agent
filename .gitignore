@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+data/app.db
+data/incoming/
+data/uploads/
+data/exports/
+
+.vscode/
+.idea/

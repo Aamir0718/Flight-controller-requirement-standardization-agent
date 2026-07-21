@@ -1,0 +1,343 @@
+{
+  "source": "INCOSE Guide to Writing Requirements v4 - Summary Sheet (INCOSE-TP-2010-006-04, June 2023)",
+  "source_file": "data/reference/incose_rwg_gtwr_v4_summary_sheet (1).pdf",
+  "rule_count": 42,
+  "rules": [
+    {
+      "id": "R1",
+      "category": "Accuracy",
+      "title": "Structured Statements",
+      "description": "Need and requirement statements must conform to one of the agreed patterns, thus resulting in a well-structured complete statement.",
+      "automatable": true,
+      "check_strategy": "structural: the text must match exactly one of the 5 EARS templates (Ubiquitous/Event-driven/State-driven/Unwanted-Behavior/Optional-Feature) or a Complex combination of them, with a single 'shall' clause and, where applicable, the trigger/condition clause leading the sentence."
+    },
+    {
+      "id": "R2",
+      "category": "Accuracy",
+      "title": "Active Voice",
+      "description": "Use the active voice in the need or requirement statement with the responsible entity clearly identified as the subject of the sentence.",
+      "automatable": true,
+      "check_strategy": "regex: flag 'shall be <past-participle>' constructions (passive voice hides the responsible actor)."
+    },
+    {
+      "id": "R3",
+      "category": "Accuracy",
+      "title": "Appropriate Subject-Verb",
+      "description": "Ensure the subject and verb of the need or requirement statement are appropriate to the entity to which the statement refers.",
+      "automatable": false,
+      "rationale_not_automatable": "Requires domain knowledge of what the entity can actually do (e.g. a sensor can 'measure' but not 'decide') -- not inferable from text patterns alone."
+    },
+    {
+      "id": "R4",
+      "category": "Accuracy",
+      "title": "Defined Terms",
+      "description": "Define all terms used within the need statement and requirement statement within an associated glossary and/or data dictionary.",
+      "automatable": false,
+      "rationale_not_automatable": "Requires cross-referencing an external project glossary/data dictionary that is out of scope for a single requirement string."
+    },
+    {
+      "id": "R5",
+      "category": "Accuracy",
+      "title": "Definite Articles",
+      "description": "Use the definite article \"the\" rather than the indefinite article \"a\".",
+      "automatable": true,
+      "check_strategy": "regex: flag the requirement's subject noun phrase (leading the sentence, or immediately after a trigger clause's comma) when it starts with 'A '/'An ' instead of 'The '."
+    },
+    {
+      "id": "R6",
+      "category": "Accuracy",
+      "title": "Common Units of Measure",
+      "description": "When stating quantities, all numbers should have appropriate and consistent units of measure explicitly stated using a common measurement system in terms of the thing the number refers.",
+      "automatable": true,
+      "check_strategy": "regex/structural: flag numeric literals with no unit token or counted noun immediately following them."
+    },
+    {
+      "id": "R7",
+      "category": "Accuracy",
+      "title": "Vague Terms",
+      "description": "Avoid the use of vague terms that provide vague quantification, such as \"some\", \"any\", \"allowable\", \"several\", \"many\", \"a lot of\", \"a few\", \"almost always\", \"very nearly\", \"nearly\", \"about\", \"close to\", \"almost\", and \"approximate\". Avoid vague adjectives such as \"ancillary\", \"relevant\", \"routine\", \"common\", \"generic\", \"significant\", \"flexible\", \"expandable\", \"typical\", \"sufficient\", \"adequate\", \"appropriate\", \"efficient\", \"effective\", \"proficient\", \"reasonable\" and \"customary.\"",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive match against the vague-quantification and vague-adjective terms named in the rule text."
+    },
+    {
+      "id": "R8",
+      "category": "Accuracy",
+      "title": "Escape Clauses",
+      "description": "Avoid the inclusion of escape clauses that state vague conditions or possibilities, such as \"so far as is possible\", \"as little as possible\", \"where possible\", \"as much as possible\", \"if it should prove necessary\", \"if necessary\", \"to the extent necessary\", \"as appropriate\", \"as required\", \"to the extent practical\", and \"if practicable\".",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive phrase match against the escape-clause phrases named in the rule text."
+    },
+    {
+      "id": "R9",
+      "category": "Accuracy",
+      "title": "Open-Ended Clauses",
+      "description": "Avoid open-ended, non-specific clauses such as \"including but not limited to\", \"etc.\" and \"and so on\".",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive phrase match against open-ended trailing clauses."
+    },
+    {
+      "id": "R10",
+      "category": "Concision",
+      "title": "Superfluous Infinitives",
+      "description": "Avoid the use of superfluous infinitives such as \"to be designed to\", \"to be able to\", \"to be capable of\", \"to enable\", \"to allow\".",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive phrase match against the named superfluous-infinitive constructions."
+    },
+    {
+      "id": "R11",
+      "category": "Concision",
+      "title": "Separate Clauses",
+      "description": "Use a separate clause for each condition or qualification.",
+      "automatable": true,
+      "check_strategy": "structural: flag more than one conditional trigger word (if/when/while/unless) joined by 'and'/'or' within a single sentence."
+    },
+    {
+      "id": "R12",
+      "category": "Non-ambiguity",
+      "title": "Correct Grammar",
+      "description": "Use correct grammar.",
+      "automatable": false,
+      "rationale_not_automatable": "Reliable grammar checking needs a full NLP parser/grammar model, not a regex or word-list check."
+    },
+    {
+      "id": "R13",
+      "category": "Non-ambiguity",
+      "title": "Correct Spelling",
+      "description": "Use correct spelling.",
+      "automatable": false,
+      "rationale_not_automatable": "Requires a maintained dictionary/spell-checker integration, which is a different kind of tool than a pattern check and is out of scope here."
+    },
+    {
+      "id": "R14",
+      "category": "Non-ambiguity",
+      "title": "Correct Punctuation",
+      "description": "Use correct punctuation.",
+      "automatable": true,
+      "check_strategy": "regex/structural: flag basic, unambiguous punctuation defects -- missing terminal period, doubled punctuation/spaces, and unmatched parentheses/quotes."
+    },
+    {
+      "id": "R15",
+      "category": "Non-ambiguity",
+      "title": "Logical Expressions",
+      "description": "Use a defined convention to express logical expressions such as \"[X AND Y]\", \"[X OR Y]\", \"[X XOR Y]\", \"NOT [X OR Y]\".",
+      "automatable": false,
+      "rationale_not_automatable": "Detecting an implicit logical expression written in prose (rather than the bracketed convention) requires semantic understanding of the sentence, not a text pattern."
+    },
+    {
+      "id": "R16",
+      "category": "Non-ambiguity",
+      "title": "Use of \"Not\"",
+      "description": "Avoid the use of \"not.\"",
+      "automatable": true,
+      "check_strategy": "regex: flag any standalone occurrence of the word 'not'."
+    },
+    {
+      "id": "R17",
+      "category": "Non-ambiguity",
+      "title": "Use of Oblique Symbol",
+      "description": "Avoid the use of the oblique (\"/\") symbol except in units, i.e., Km/hr, or fractions.",
+      "automatable": true,
+      "check_strategy": "regex: flag '/' characters that are not immediately part of a recognized composite unit (e.g. km/h, m/s) or a numeric fraction."
+    },
+    {
+      "id": "R18",
+      "category": "Singularity",
+      "title": "Single Thought Sentence",
+      "description": "Write a single sentence that contains a single thought conditioned and qualified by relevant sub-clauses.",
+      "automatable": true,
+      "check_strategy": "structural: flag more than one 'shall' occurrence within a single sentence."
+    },
+    {
+      "id": "R19",
+      "category": "Singularity",
+      "title": "Combinators",
+      "description": "Avoid words that join or combine clauses, such as \"and\", \"or\", \"then\", \"unless\", \"but\", \"as well as\", \"but also\", \"however\", \"whether\", \"meanwhile\", \"whereas\", \"on the other hand\", or \"otherwise\".",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive match against the named combinator words/phrases anywhere in the sentence."
+    },
+    {
+      "id": "R20",
+      "category": "Singularity",
+      "title": "Purpose Phrases",
+      "description": "Avoid phrases that indicate the \"purpose of\", \"intent of\", or \"reason for\" the need statement or requirement statement.",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive phrase match against 'in order to', 'so that', 'for the purpose of', 'the intent of', 'the reason for', and similar purpose-indicating phrases."
+    },
+    {
+      "id": "R21",
+      "category": "Singularity",
+      "title": "Parentheses",
+      "description": "Avoid parentheses and brackets containing subordinate text.",
+      "automatable": true,
+      "check_strategy": "regex: flag '(...)' or '[...]' spans that contain more than a single short token (i.e. a subordinate clause, not just a unit/acronym)."
+    },
+    {
+      "id": "R22",
+      "category": "Singularity",
+      "title": "Enumeration",
+      "description": "Enumerate sets explicitly instead of using a group noun to name the set.",
+      "automatable": true,
+      "check_strategy": "word list: case-insensitive match against common un-enumerated collective references such as 'the following', 'such as', 'various', 'a variety of', 'these parameters/items'."
+    },
+    {
+      "id": "R23",
+      "category": "Singularity",
+      "title": "Supporting Diagram, Model, or ICD",
+      "description": "When a need or requirement is related to complex behavior, refer to a supporting diagram, model, or ICD.",
+      "automatable": false,
+      "rationale_not_automatable": "Whether behavior is 'complex' enough to need a supporting diagram/model/ICD is a domain judgement call, not a text pattern."
+    },
+    {
+      "id": "R24",
+      "category": "Completeness",
+      "title": "Pronouns",
+      "description": "Avoid the use of personal and indefinite pronouns.",
+      "automatable": true,
+      "check_strategy": "word list: word-boundary match against personal/indefinite pronouns (it, this, that, these, those, they, them, their, one, someone, anyone, anything, something, he, she, him, her)."
+    },
+    {
+      "id": "R25",
+      "category": "Completeness",
+      "title": "Headings",
+      "description": "Avoid relying on headings to support explanation or understanding of the need or requirement.",
+      "automatable": false,
+      "rationale_not_automatable": "Whether a requirement's meaning depends on a document heading is a document-structure/context question, not visible from the requirement text in isolation."
+    },
+    {
+      "id": "R26",
+      "category": "Realism",
+      "title": "Absolutes",
+      "description": "Avoid using unachievable absolutes such as 100% reliability, 100% availability, all, every, always, never, etc.",
+      "automatable": true,
+      "check_strategy": "word list: match against absolute terms ('100%', 'all', 'every', 'always', 'never', 'none', 'zero defects')."
+    },
+    {
+      "id": "R27",
+      "category": "Conditions",
+      "title": "Explicit Conditions",
+      "description": "State conditions' applicability explicitly instead of leaving applicability to be inferred from the context.",
+      "automatable": true,
+      "check_strategy": "word list: flag words implying an inferred/contextual condition rather than an explicit one ('typically', 'usually', 'generally', 'normally', 'in most cases', 'under normal circumstances')."
+    },
+    {
+      "id": "R28",
+      "category": "Conditions",
+      "title": "Multiple Conditions",
+      "description": "Express the propositional nature of a condition explicitly for a single action instead of giving lists of actions for a specific condition.",
+      "automatable": true,
+      "check_strategy": "structural: flag a single trigger/condition clause followed by two or more actions joined by 'and'/'or' in the shall-clause."
+    },
+    {
+      "id": "R29",
+      "category": "Uniqueness",
+      "title": "Classification",
+      "description": "Classify needs and requirements according to the aspects of the problem or system it addresses.",
+      "automatable": false,
+      "rationale_not_automatable": "Classification against a taxonomy is a document/set-level organizational activity, not something derivable from one requirement's text."
+    },
+    {
+      "id": "R30",
+      "category": "Uniqueness",
+      "title": "Unique Expression",
+      "description": "Express each need and requirement once and only once.",
+      "automatable": false,
+      "rationale_not_automatable": "Detecting duplication requires comparing against every other requirement in the set; score_requirement operates on one requirement's text at a time."
+    },
+    {
+      "id": "R31",
+      "category": "Abstraction",
+      "title": "Solution Free",
+      "description": "Avoid stating implementation in a need statement or requirement statement unless there is rationale for constraining the design.",
+      "automatable": false,
+      "rationale_not_automatable": "Distinguishing an over-constraining implementation detail from a legitimate, rationale-backed design constraint (e.g. a mandated protocol/standard) requires domain judgement."
+    },
+    {
+      "id": "R32",
+      "category": "Quantifiers",
+      "title": "Universal Qualification",
+      "description": "Use \"each\" instead of \"all\", \"any\", or \"both\" when universal quantification is intended.",
+      "automatable": true,
+      "check_strategy": "word list: flag 'all'/'any'/'both' used as a quantifier and suggest 'each'."
+    },
+    {
+      "id": "R33",
+      "category": "Tolerance",
+      "title": "Range of Values",
+      "description": "Define each quantity with a range of values appropriate to the entity to which the quantity applies and against which the entity will be verified or validated.",
+      "automatable": true,
+      "check_strategy": "structural: flag a single-point numeric target with no accompanying tolerance/range marker (+/-, 'between X and Y', 'to', 'range')."
+    },
+    {
+      "id": "R34",
+      "category": "Quantification",
+      "title": "Measurable Performance",
+      "description": "Provide specific measurable performance targets appropriate to the entity to which the need or requirement is stated and against which the entity will be verified to meet.",
+      "automatable": true,
+      "check_strategy": "word list + structural: flag unbounded performance/optimization language ('optimize', 'maximize', 'minimize', 'improve') and qualitative performance adjectives with no accompanying numeric target."
+    },
+    {
+      "id": "R35",
+      "category": "Quantification",
+      "title": "Temporal Dependencies",
+      "description": "Define temporal dependencies explicitly instead of using indefinite temporal keywords such as \"eventually\", \"until\", \"before\", \"after\", \"as\", \"once\", \"earliest\", \"latest\", \"instantaneous\", \"simultaneous\", and \"at last\".",
+      "automatable": true,
+      "check_strategy": "word list: word-boundary match against the named indefinite temporal keywords."
+    },
+    {
+      "id": "R36",
+      "category": "Uniformity",
+      "title": "Consistent Terms and Units",
+      "description": "Ensure each term and unit of measure used throughout need and requirement sets as well as associated models and other SE artefacts developed across the lifecycle are consistent with the project's defined ontology.",
+      "automatable": false,
+      "rationale_not_automatable": "Consistency is a cross-requirement-set property (same term/unit used the same way everywhere); a single requirement's text has nothing to be consistent with on its own."
+    },
+    {
+      "id": "R37",
+      "category": "Uniformity",
+      "title": "Acronyms",
+      "description": "If acronyms are used, they must be consistent throughout need and requirement sets as well as associated models and other SE artefacts developed across the lifecycle.",
+      "automatable": true,
+      "check_strategy": "structural (best-effort, single-requirement scope): flag ALL-CAPS acronym-looking tokens (2+ letters) that have no inline expansion in parentheses nearby; full cross-set consistency needs the whole requirement set."
+    },
+    {
+      "id": "R38",
+      "category": "Uniformity",
+      "title": "Abbreviations",
+      "description": "Avoid the use of abbreviations in needs and requirement statements as well as associated models and other SE lifecycle artefacts.",
+      "automatable": true,
+      "check_strategy": "word list/regex: flag common informal abbreviations (e.g. 'approx.', 'min.', 'max.', 'temp.', 'qty.', 'spec.', 'req.', 'e.g.', 'i.e.', 'vs.', 'w/', 'w/o')."
+    },
+    {
+      "id": "R39",
+      "category": "Uniformity",
+      "title": "Style Guide",
+      "description": "Use a project-wide style guide for individual need statements and requirement statements.",
+      "automatable": false,
+      "rationale_not_automatable": "Conformance to a project-specific style guide document is external context this module does not have access to."
+    },
+    {
+      "id": "R40",
+      "category": "Uniformity",
+      "title": "Decimal Format",
+      "description": "Use a consistent format and number of signification digits for the specification of decimal numbers.",
+      "automatable": true,
+      "check_strategy": "regex: flag decimal numbers missing a leading zero (e.g. '.5' instead of '0.5')."
+    },
+    {
+      "id": "R41",
+      "category": "Modularity",
+      "title": "Related Needs and Requirements",
+      "description": "Group related needs and requirements together.",
+      "automatable": false,
+      "rationale_not_automatable": "Grouping/organization is a property of how the requirement set is arranged, not of one requirement's text."
+    },
+    {
+      "id": "R42",
+      "category": "Modularity",
+      "title": "Structured Sets",
+      "description": "Conform to a defined structure or template for organizing sets of needs and requirements.",
+      "automatable": false,
+      "rationale_not_automatable": "Set/document-template conformance cannot be assessed from a single requirement string."
+    }
+  ]
+}
