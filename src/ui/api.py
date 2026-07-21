@@ -13,7 +13,7 @@ Run it (binds to loopback by default, matching the offline requirement):
 """
 
 from __future__ import annotations
-
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -27,6 +27,16 @@ from llm.local_llm_client import LocalLLMClient
 from pipeline.graph import build_graph, run_requirement
 
 app = FastAPI(title="Flight Controller Requirements Agent")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = REPO_ROOT / "data" / "uploads"
