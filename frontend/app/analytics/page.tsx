@@ -15,19 +15,21 @@ import {
 } from "recharts";
 import { BarChart3, PieChart as PieChartIcon, Award, ShieldAlert, Cpu } from "lucide-react";
 import { motion } from "framer-motion";
+import { useActiveRun } from "@/context/ActiveRunContext";
+import { AnalyticsEmptyState } from "@/components/empty-states/AnalyticsEmptyState";
 
 export default function AnalyticsPage() {
+  const { activeRunId } = useActiveRun();
+
   const { data: runs } = useQuery({
     queryKey: ["runs"],
     queryFn: () => apiService.listRuns(),
   });
 
-  const latestRunId = runs && runs.length > 0 ? runs[runs.length - 1].id : null;
-
   const { data: requirements } = useQuery({
-    queryKey: ["requirements", latestRunId],
-    queryFn: () => apiService.getRunRequirements(latestRunId!),
-    enabled: !!latestRunId,
+    queryKey: ["requirements", activeRunId],
+    queryFn: () => apiService.getRunRequirements(activeRunId!),
+    enabled: !!activeRunId,
   });
 
   // Mock / Calculated chart data from real requirements if available
@@ -47,12 +49,12 @@ export default function AnalyticsPage() {
   const scoreData = requirements?.map((req, idx) => ({
     name: `REQ #${idx + 1}`,
     score: req.recommended_score,
-  })) || [
-    { name: "REQ #1", score: 96.4 },
-    { name: "REQ #2", score: 88.0 },
-    { name: "REQ #3", score: 92.5 },
-    { name: "REQ #4", score: 74.0 },
-  ];
+  })) || [];
+
+  // Show empty state if no requirements data
+  if (!requirements || requirements.length === 0) {
+    return <AnalyticsEmptyState />;
+  }
 
   return (
     <div className="space-y-6 select-none py-2">
@@ -83,7 +85,7 @@ export default function AnalyticsPage() {
                   requirements.reduce((acc, r) => acc + r.recommended_score, 0) /
                   requirements.length
                 ).toFixed(1)
-              : "91.2"}%
+              : "—"}%
           </div>
           <p className="text-xs text-[#8FA3BF]">Based on INCOSE Rulebook v2.0</p>
         </div>
@@ -97,7 +99,7 @@ export default function AnalyticsPage() {
                     requirements.length) *
                   100
                 ).toFixed(0)
-              : "85"}%
+              : "—"}%
           </div>
           <p className="text-xs text-[#00C853]">Passed review threshold</p>
         </div>
@@ -114,16 +116,22 @@ export default function AnalyticsPage() {
             </h2>
           </div>
           <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={scoreData}>
-                <XAxis dataKey="name" stroke="#8FA3BF" fontSize={11} />
-                <YAxis stroke="#8FA3BF" fontSize={11} domain={[0, 100]} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#0F172A", borderColor: "#243244", color: "#F5F7FA" }}
-                />
-                <Bar dataKey="score" fill="#1EA7FF" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {scoreData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={scoreData}>
+                  <XAxis dataKey="name" stroke="#8FA3BF" fontSize={11} />
+                  <YAxis stroke="#8FA3BF" fontSize={11} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#0F172A", borderColor: "#243244", color: "#F5F7FA" }}
+                  />
+                  <Bar dataKey="score" fill="#1EA7FF" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-[#8FA3BF]">
+                Select a run from Run History or upload a workbook to view requirement metrics.
+              </div>
+            )}
           </div>
         </div>
 
@@ -160,7 +168,7 @@ export default function AnalyticsPage() {
               </ResponsiveContainer>
             ) : (
               <div className="text-center text-xs text-[#8FA3BF]">
-                Default patterns: State-Driven (45%), Event-Driven (35%), Ubiquitous (20%)
+                Select a run from Run History or upload a workbook to view EARS pattern distribution.
               </div>
             )}
           </div>

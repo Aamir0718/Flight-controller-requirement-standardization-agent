@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from zipfile import BadZipFile
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -42,6 +43,41 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = REPO_ROOT / "data" / "uploads"
 EXPORT_DIR = REPO_ROOT / "data" / "exports"
 
+INVALID_EXCEL_FILE = "INVALID_EXCEL_FILE"
+PARSE_ERROR = "PARSE_ERROR"
+INVALID_FILE_TYPE = "INVALID_FILE_TYPE"
+
+
+def _error_code_for_parse_issues(issues: list) -> str:
+    """Maps parser-reported workbook issues to a frontend-friendly error code."""
+    for issue in issues:
+        reason = issue.reason
+        if reason == "file_not_found":
+            return PARSE_ERROR
+        if reason.startswith("failed_to_open_workbook"):
+            return INVALID_EXCEL_FILE
+        if reason.startswith("failed_to_parse_sheet"):
+            return PARSE_ERROR
+    return PARSE_ERROR
+
+
+def _error_code_for_exception(exc: Exception) -> str | None:
+    """Maps parse-related exceptions to friendly codes; None preserves legacy formatting."""
+    if isinstance(exc, BadZipFile):
+        return INVALID_EXCEL_FILE
+
+    exc_name = type(exc).__name__
+    if exc_name in ("InvalidFileException", "UnsupportedFormatException"):
+        return INVALID_EXCEL_FILE
+
+    message = str(exc).lower()
+    if "failed to parse" in message:
+        return PARSE_ERROR
+    if "bad zip" in message or "not a zip file" in message:
+        return INVALID_EXCEL_FILE
+
+    return None
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -60,7 +96,13 @@ def _process_run(run_id: int, file_path: Path) -> None:
 
         parse_result = parse_workbook(file_path)
         if parse_result.issues:
-            raise RuntimeError(f"Failed to parse {file_path.name}: {parse_result.issues}")
+            db.update_run_status(
+                conn,
+                run_id,
+                "failed",
+                error_message=_error_code_for_parse_issues(parse_result.issues),
+            )
+            return
         db.set_run_total_requirements(conn, run_id, len(parse_result.candidates))
 
         client = LocalLLMClient()
@@ -75,7 +117,9 @@ def _process_run(run_id: int, file_path: Path) -> None:
 
         db.update_run_status(conn, run_id, "completed")
     except Exception as exc:  # noqa: BLE001 -- always record, a background task must not fail silently
-        db.update_run_status(conn, run_id, "failed", error_message=f"{type(exc).__name__}: {exc}")
+        friendly_code = _error_code_for_exception(exc)
+        error_message = friendly_code if friendly_code else f"{type(exc).__name__}: {exc}"
+        db.update_run_status(conn, run_id, "failed", error_message=error_message)
     finally:
         conn.close()
 

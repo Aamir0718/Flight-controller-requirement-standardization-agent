@@ -1,21 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { apiService } from "@/services/api";
 import { Download, FileSpreadsheet, FileCode, FileText, CheckCircle2 } from "lucide-react";
-import { Suspense } from "react";
+import { useActiveRun } from "@/context/ActiveRunContext";
+import { ExportEmptyState } from "@/components/empty-states/ExportEmptyState";
 
 function ExportContent() {
-  const searchParams = useSearchParams();
-  const runIdParam = searchParams.get("run_id");
-
-  const { data: runs } = useQuery({
-    queryKey: ["runs"],
-    queryFn: () => apiService.listRuns(),
-  });
-
-  const activeRunId = runIdParam ? parseInt(runIdParam, 10) : (runs && runs.length > 0 ? runs[runs.length - 1].id : null);
+  const { activeRunId } = useActiveRun();
 
   const { data: run } = useQuery({
     queryKey: ["run_status", activeRunId],
@@ -24,11 +16,7 @@ function ExportContent() {
   });
 
   if (!activeRunId) {
-    return (
-      <div className="py-12 text-center text-[#8FA3BF] text-sm">
-        No active run selected for export. Please select a completed run.
-      </div>
-    );
+    return <ExportEmptyState />;
   }
 
   const downloadUrl = apiService.getDownloadUrl(activeRunId);
@@ -133,9 +121,5 @@ function ExportContent() {
 }
 
 export default function ExportPage() {
-  return (
-    <Suspense fallback={<div className="p-8 text-center text-sm text-[#8FA3BF]">Loading export center...</div>}>
-      <ExportContent />
-    </Suspense>
-  );
+  return <ExportContent />;
 }

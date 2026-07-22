@@ -154,6 +154,19 @@ class TestUpload:
         # total_requirements was set (parsing succeeded) even though generation failed
         assert run["total_requirements"] == 2
 
+    def test_corrupt_workbook_marks_run_failed_with_friendly_code(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
+
+        corrupt_bytes = (Path(__file__).resolve().parent / "fixtures" / "corrupt_file.xlsx").read_bytes()
+        run_id = _upload(client, filename="corrupt_file.xlsx", content=corrupt_bytes).json()["run_id"]
+        run = client.get(f"/runs/{run_id}").json()
+
+        assert run["status"] == "failed"
+        assert run["error_message"] == api.INVALID_EXCEL_FILE
+        assert "RuntimeError" not in (run["error_message"] or "")
+        assert "BadZipFile" not in (run["error_message"] or "")
+
 
 # ---------------------------------------------------------------------------
 # /runs, /runs/{id}, /runs/{id}/requirements

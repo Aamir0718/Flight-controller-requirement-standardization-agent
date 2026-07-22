@@ -5,11 +5,13 @@ import { apiService } from "@/services/api";
 import { useState } from "react";
 import { History, Search, FileSpreadsheet, CheckCircle2, AlertCircle, Clock, ArrowRight } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import Link from "next/link";
 import { motion } from "framer-motion";
+import { useSelectRun } from "@/hooks/useSelectRun";
+import { HistoryEmptyState } from "@/components/empty-states/HistoryEmptyState";
 
 export default function HistoryPage() {
   const [search, setSearch] = useState("");
+  const selectRun = useSelectRun();
 
   const { data: runs, isLoading } = useQuery({
     queryKey: ["runs"],
@@ -55,9 +57,7 @@ export default function HistoryPage() {
       {isLoading ? (
         <div className="py-12 text-center text-[#8FA3BF] text-sm">Loading run history...</div>
       ) : !filteredRuns || filteredRuns.length === 0 ? (
-        <div className="drdo-card p-12 text-center text-[#8FA3BF] text-sm">
-          No historical runs match your search query.
-        </div>
+        <HistoryEmptyState />
       ) : (
         <div className="space-y-3">
           {filteredRuns.slice().reverse().map((run) => (
@@ -106,13 +106,14 @@ export default function HistoryPage() {
                 </span>
 
                 {run.status === "completed" && (
-                  <Link
-                    href={`/review?run_id=${run.id}`}
+                  <button
+                    type="button"
+                    onClick={() => selectRun(run.id)}
                     className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-[#1EA7FF] hover:bg-[#008ee6] text-xs font-semibold text-white shadow-sm transition"
                   >
                     <span>View Review</span>
                     <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+                  </button>
                 )}
               </div>
             </motion.div>

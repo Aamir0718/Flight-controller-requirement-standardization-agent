@@ -6,18 +6,13 @@ import { apiService } from "@/services/api";
 import { useState, Suspense } from "react";
 import { Award, Columns3, ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { useActiveRun } from "@/context/ActiveRunContext";
+import { CompareEmptyState } from "@/components/empty-states/CompareEmptyState";
 
 function CompareContent() {
   const searchParams = useSearchParams();
-  const runIdParam = searchParams.get("run_id");
   const reqSeqParam = searchParams.get("req_seq");
-
-  const { data: runs } = useQuery({
-    queryKey: ["runs"],
-    queryFn: () => apiService.listRuns(),
-  });
-
-  const activeRunId = runIdParam ? parseInt(runIdParam, 10) : (runs && runs.length > 0 ? runs[runs.length - 1].id : null);
+  const { activeRunId } = useActiveRun();
 
   const { data: requirements, isLoading } = useQuery({
     queryKey: ["requirements", activeRunId],
@@ -30,11 +25,7 @@ function CompareContent() {
   );
 
   if (!activeRunId) {
-    return (
-      <div className="py-12 text-center text-[#8FA3BF] text-sm">
-        No run selected for comparison. Please upload a workbook or select a run from history.
-      </div>
-    );
+    return <CompareEmptyState />;
   }
 
   const selectedReq = requirements?.find((r) => r.sequence_in_run + 1 === selectedSeq) || requirements?.[0];
@@ -61,7 +52,7 @@ function CompareContent() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#243244]">
         <div>
           <Link
-            href={`/review?run_id=${activeRunId}`}
+            href="/review"
             className="inline-flex items-center gap-1.5 text-xs text-[#1EA7FF] hover:underline mb-1"
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Back to Review Queue

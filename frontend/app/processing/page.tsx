@@ -1,26 +1,28 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { apiService } from "@/services/api";
-import { useEffect, Suspense } from "react";
+import { useEffect } from "react";
 import { 
   CheckCircle2, 
   Loader2, 
-  AlertCircle, 
   ArrowRight, 
   Cpu, 
-  FileSpreadsheet, 
-  Sparkles, 
   ShieldAlert 
 } from "lucide-react";
 import { motion } from "framer-motion";
+import {
+  InvalidExcelErrorCard,
+  isInvalidExcelError,
+} from "@/components/errors/InvalidExcelErrorCard";
+import { useActiveRun } from "@/context/ActiveRunContext";
+import { ProcessingEmptyState } from "@/components/empty-states/ProcessingEmptyState";
 
 function ProcessingContent() {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const runIdParam = searchParams.get("run_id");
-  const runId = runIdParam ? parseInt(runIdParam, 10) : null;
+  const { activeRunId } = useActiveRun();
+  const runId = activeRunId;
 
   const { data: run, isError } = useQuery({
     queryKey: ["run_status", runId],
@@ -38,18 +40,14 @@ function ProcessingContent() {
   useEffect(() => {
     if (run?.status === "completed") {
       const timer = setTimeout(() => {
-        router.push(`/review?run_id=${runId}`);
+        router.push("/review");
       }, 1200);
       return () => clearTimeout(timer);
     }
   }, [run?.status, runId, router]);
 
   if (!runId) {
-    return (
-      <div className="py-12 text-center text-[#8FA3BF] text-sm">
-        No active run specified. Please upload a workbook first.
-      </div>
-    );
+    return <ProcessingEmptyState />;
   }
 
   const total = run?.total_requirements || 0;
@@ -153,7 +151,11 @@ function ProcessingContent() {
       </div>
 
       {/* Failure State Container */}
-      {isFailed && (
+      {isFailed && isInvalidExcelError(run?.error_message) && (
+        <InvalidExcelErrorCard />
+      )}
+
+      {isFailed && !isInvalidExcelError(run?.error_message) && (
         <div className="drdo-card p-6 border-[#FF4D4F]/40 bg-[#FF4D4F]/5 space-y-4">
           <div className="flex items-start gap-3">
             <ShieldAlert className="w-5 h-5 text-[#FF4D4F] flex-shrink-0 mt-0.5" />
@@ -184,7 +186,7 @@ function ProcessingContent() {
             <span>Analysis completed successfully! Redirecting to review workspace...</span>
           </div>
           <button
-            onClick={() => router.push(`/review?run_id=${runId}`)}
+            onClick={() => router.push("/review")}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#00C853] text-white font-semibold hover:bg-[#00b048] transition"
           >
             <span>Proceed to Review</span>
@@ -197,9 +199,5 @@ function ProcessingContent() {
 }
 
 export default function ProcessingPage() {
-  return (
-    <Suspense fallback={<div className="p-8 text-center text-sm text-[#8FA3BF]">Loading status...</div>}>
-      <ProcessingContent />
-    </Suspense>
-  );
+  return <ProcessingContent />;
 }

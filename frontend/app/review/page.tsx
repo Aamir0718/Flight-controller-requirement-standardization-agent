@@ -1,9 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams, useRouter } from "next/navigation";
 import { apiService } from "@/services/api";
-import { useState, Suspense } from "react";
+import { useState } from "react";
 import { Requirement, Candidate } from "@/types";
 import { 
   CheckCircle2, 
@@ -20,24 +19,16 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { useActiveRun } from "@/context/ActiveRunContext";
+import { ReviewEmptyState } from "@/components/empty-states/ReviewEmptyState";
 
 function ReviewContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const runIdParam = searchParams.get("run_id");
-  const runId = runIdParam ? parseInt(runIdParam, 10) : null;
+  const { activeRunId } = useActiveRun();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "review" | "ready">("all");
   const [acceptedReqs, setAcceptedReqs] = useState<Record<number, boolean>>({});
   const [rejectedReqs, setRejectedReqs] = useState<Record<number, boolean>>({});
-
-  const { data: runs } = useQuery({
-    queryKey: ["runs"],
-    queryFn: () => apiService.listRuns(),
-  });
-
-  const activeRunId = runId || (runs && runs.length > 0 ? runs[runs.length - 1].id : null);
 
   const { data: requirements, isLoading } = useQuery({
     queryKey: ["requirements", activeRunId],
@@ -46,11 +37,7 @@ function ReviewContent() {
   });
 
   if (!activeRunId) {
-    return (
-      <div className="py-12 text-center text-[#8FA3BF] text-sm">
-        No active review session. Please upload a workbook or select a run from history.
-      </div>
-    );
+    return <ReviewEmptyState />;
   }
 
   const filteredRequirements = requirements?.filter((req) => {
@@ -82,14 +69,14 @@ function ReviewContent() {
 
         <div className="flex items-center gap-3">
           <Link
-            href={`/compare?run_id=${activeRunId}`}
+            href="/compare"
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0F172A] border border-[#243244] text-xs font-semibold text-[#1EA7FF] hover:border-[#1EA7FF]/40 transition"
           >
             <Columns3 className="w-4 h-4" />
             <span>Open Side-by-Side Matrix</span>
           </Link>
           <Link
-            href={`/export?run_id=${activeRunId}`}
+            href="/export"
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1EA7FF] hover:bg-[#008ee6] text-xs font-semibold text-white transition shadow-lg shadow-[#1EA7FF]/20"
           >
             <span>Export Report</span>
@@ -326,7 +313,7 @@ function ReviewContent() {
                   </div>
 
                   <Link
-                    href={`/compare?run_id=${activeRunId}&req_seq=${seq}`}
+                    href={`/compare?req_seq=${seq}`}
                     className="text-xs font-semibold text-[#1EA7FF] hover:underline flex items-center gap-1"
                   >
                     <span>View Word Diff Comparison Matrix</span>
@@ -343,9 +330,5 @@ function ReviewContent() {
 }
 
 export default function ReviewPage() {
-  return (
-    <Suspense fallback={<div className="p-8 text-center text-sm text-[#8FA3BF]">Loading review workspace...</div>}>
-      <ReviewContent />
-    </Suspense>
-  );
+  return <ReviewContent />;
 }

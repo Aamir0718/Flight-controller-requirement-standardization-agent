@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { apiService } from "@/services/api";
 import { UploadCloud, FileSpreadsheet, AlertCircle, CheckCircle2, ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
+import { useActiveRun } from "@/context/ActiveRunContext";
 
 export default function UploadPage() {
   const router = useRouter();
+  const { setActiveRunId } = useActiveRun();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,8 @@ export default function UploadPage() {
 
     try {
       const response = await apiService.uploadWorkbook(file);
-      router.push(`/processing?run_id=${response.run_id}`);
+      setActiveRunId(response.run_id);
+      router.push("/processing");
     } catch (err: any) {
       setError(err.response?.data?.detail || "Upload failed. Please ensure the backend is running.");
       setIsUploading(false);
