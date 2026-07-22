@@ -43,6 +43,29 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = REPO_ROOT / "data" / "uploads"
 EXPORT_DIR = REPO_ROOT / "data" / "exports"
 
+
+def _get_run_upload_dir(run_id: int) -> Path:
+    """Returns the run-specific upload directory: data/uploads/run_{id}/"""
+    return UPLOAD_DIR / f"run_{run_id}"
+
+
+def _get_run_export_dir(run_id: int) -> Path:
+    """Returns the run-specific export directory: data/exports/run_{id}/"""
+    return EXPORT_DIR / f"run_{run_id}"
+
+
+def _ensure_run_folder_structure(run_id: int) -> None:
+    """Creates the run folder structure with input, output, and logs subdirectories."""
+    run_upload_dir = _get_run_upload_dir(run_id)
+    run_export_dir = _get_run_export_dir(run_id)
+    
+    # Create upload structure: run_{id}/input/
+    (run_upload_dir / "input").mkdir(parents=True, exist_ok=True)
+    
+    # Create export structure: run_{id}/output/ and run_{id}/logs/
+    (run_export_dir / "output").mkdir(parents=True, exist_ok=True)
+    (run_export_dir / "logs").mkdir(parents=True, exist_ok=True)
+
 INVALID_EXCEL_FILE = "INVALID_EXCEL_FILE"
 PARSE_ERROR = "PARSE_ERROR"
 INVALID_FILE_TYPE = "INVALID_FILE_TYPE"
@@ -133,17 +156,38 @@ async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported.")
 
+    # Step 1: Save file temporarily to get run_id
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    saved_path = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
-    saved_path.write_bytes(await file.read())
+    temp_path = UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{file.filename}"
+    temp_path.write_bytes(await file.read())
 
+    # Step 2: Create run in database to get run_id
     conn = db.connect()
     try:
-        run_id = db.create_run(conn, file_name=file.filename, file_path=saved_path)
+        run_id = db.create_run(conn, file_name=file.filename, file_path=temp_path)
     finally:
         conn.close()
 
-    background_tasks.add_task(_process_run, run_id, saved_path)
+    # Step 3: Create run folder structure
+    _ensure_run_folder_structure(run_id)
+
+    # Step 4: Move file to final location: uploads/run_{id}/input/
+    final_path = _get_run_upload_dir(run_id) / "input" / file.filename
+    temp_path.rename(final_path)
+
+    # Step 5: Update database with new file path
+    conn = db.connect()
+    try:
+        conn.execute(
+            "UPDATE runs SET file_path = ? WHERE id = ?",
+            (str(final_path), run_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Step 6: Schedule background task with final path
+    background_tasks.add_task(_process_run, run_id, final_path)
     return {"run_id": run_id, "status": "pending"}
 
 
@@ -193,8 +237,11 @@ def download_run(run_id: int) -> FileResponse:
                 detail=f"Run {run_id} is not ready to download (status: {run['status']}).",
             )
 
-        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-        export_path = EXPORT_DIR / f"run_{run_id}_review.xlsx"
+        # Ensure run folder structure exists
+        _ensure_run_folder_structure(run_id)
+
+        # Export to run-specific output directory: exports/run_{id}/output/
+        export_path = _get_run_export_dir(run_id) / "output" / "reviewed_requirements.xlsx"
         db.export_run_to_excel(conn, run_id, export_path)
     finally:
         conn.close()
