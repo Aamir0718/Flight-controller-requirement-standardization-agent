@@ -196,16 +196,15 @@ def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> None:
         result = analyzer.analyze_requirements(run_id, req_data)
 
         # Save relationships to database
+        # Save relationships to database. analyzer.py's analyze_requirements
+        # already sets req_id_1/req_id_2 to the real requirement IDs (not
+        # positions), so no remapping is needed here.
         for rel in result.relationships:
-            # Map relationship data to actual requirement IDs
-            req_id_1 = req_data[rel.req_id_1]["id"]
-            req_id_2 = req_data[rel.req_id_2]["id"]
-            
             db.save_requirement_relationship(
                 conn,
                 run_id,
-                req_id_1,
-                req_id_2,
+                rel.req_id_1,
+                rel.req_id_2,
                 rel.relationship_type.value,
                 rel.similarity_score,
                 rel.confidence,

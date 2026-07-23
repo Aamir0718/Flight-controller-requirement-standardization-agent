@@ -10,6 +10,9 @@
   ({pattern, rewritten_text, vague_terms, confidence, notes}). If the model
   returns malformed JSON or is missing required keys, it retries exactly
   once with a stricter instruction before raising LLMResponseError.
+- generate_json() is the same idea but for any caller-supplied schema
+  (e.g. consistency.analyzer's contradiction check), since that response
+  shape is different from the fixed candidate-rewrite schema above.
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from langchain_core import messages
 import ollama
 
 from config import get_settings
@@ -53,6 +55,7 @@ RESPONSE_SCHEMA = {
     },
     "required": ["pattern", "rewritten_text", "vague_terms", "confidence", "notes"],
 }
+
 
 class OllamaUnavailableError(RuntimeError):
     """Raised when the configured local Ollama instance cannot be reached.
@@ -164,9 +167,59 @@ class LocalLLMClient:
 
         return self._to_result(parsed)
 
+    def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict[str, Any],
+        required_keys: set[str],
+        *,
+        temperature: float | None = None,
+        seed: int | None = None,
+    ) -> dict[str, Any]:
+        """Like generate_structured, but for any caller-supplied schema --
+        used by callers (e.g. consistency.analyzer) whose prompts need a
+        response shape other than the fixed candidate-rewrite schema."""
+        self.check_reachable()
+        effective_temperature = self.temperature if temperature is None else temperature
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        raw_text = self._chat_with_schema(messages, schema, effective_temperature, seed)
+        parsed = self._try_parse_generic(raw_text, required_keys)
+
+        if parsed is None:
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_text},
+                {"role": "user", "content": (
+                    "Your previous response was not valid JSON matching the required "
+                    f"schema. Respond with ONLY a JSON object containing exactly these "
+                    f"keys: {sorted(required_keys)}."
+                )},
+            ]
+            raw_text = self._chat_with_schema(retry_messages, schema, effective_temperature, seed)
+            parsed = self._try_parse_generic(raw_text, required_keys)
+
+        if parsed is None:
+            raise LLMResponseError(
+                f"Ollama did not return valid JSON matching schema {sorted(required_keys)}, "
+                f"even after a stricter retry. Last raw response: {raw_text!r}"
+            )
+        return parsed
+
     def _chat(
         self,
         messages: list[dict[str, str]],
+        temperature: float | None = None,
+        seed: int | None = None,
+    ) -> str:
+        return self._chat_with_schema(messages, RESPONSE_SCHEMA, temperature, seed)
+
+    def _chat_with_schema(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
         temperature: float | None = None,
         seed: int | None = None,
     ) -> str:
@@ -179,13 +232,35 @@ class LocalLLMClient:
         response = self._client.chat(
             model=self.model,
             messages=messages,
-            format=RESPONSE_SCHEMA,
+            format=schema,
             options=options,
         )
         return response["message"]["content"]
 
     @staticmethod
     def _try_parse(raw_text: str) -> dict[str, Any] | None:
+        data = LocalLLMClient._try_parse_generic(raw_text, REQUIRED_KEYS)
+        if data is None:
+            return None
+
+        if not isinstance(data["pattern"], str) or not isinstance(data["rewritten_text"], str):
+            return None
+        if not isinstance(data["notes"], str):
+            return None
+        if not isinstance(data["confidence"], (int, float)) or isinstance(data["confidence"], bool):
+            return None
+        if not isinstance(data["vague_terms"], list):
+            return None
+        for item in data["vague_terms"]:
+            if not isinstance(item, dict) or "term" not in item or "suggestion" not in item:
+                return None
+            if not isinstance(item["term"], str) or not isinstance(item["suggestion"], str):
+                return None
+
+        return data
+
+    @staticmethod
+    def _try_parse_generic(raw_text: str, required_keys: set[str]) -> dict[str, Any] | None:
         text = _JSON_FENCE.sub("", raw_text.strip()).strip()
 
         # Find the matching close-brace for the first '{', tracking whether
@@ -224,23 +299,8 @@ class LocalLLMClient:
         except json.JSONDecodeError:
             return None
 
-    # ...rest of the method (schema validation) stays exactly the same...
-
-        if not isinstance(data, dict) or not REQUIRED_KEYS.issubset(data.keys()):
+        if not isinstance(data, dict) or not required_keys.issubset(data.keys()):
             return None
-        if not isinstance(data["pattern"], str) or not isinstance(data["rewritten_text"], str):
-            return None
-        if not isinstance(data["notes"], str):
-            return None
-        if not isinstance(data["confidence"], (int, float)) or isinstance(data["confidence"], bool):
-            return None
-        if not isinstance(data["vague_terms"], list):
-            return None
-        for item in data["vague_terms"]:
-            if not isinstance(item, dict) or "term" not in item or "suggestion" not in item:
-                return None
-            if not isinstance(item["term"], str) or not isinstance(item["suggestion"], str):
-                return None
 
         return data
 

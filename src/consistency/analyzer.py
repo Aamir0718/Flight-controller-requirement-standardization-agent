@@ -6,7 +6,7 @@ Falls back to TF-IDF if sentence-transformers is blocked by system security poli
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
@@ -16,6 +16,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from config import get_settings
 from llm.local_llm_client import LocalLLMClient
+
+_CONTRADICTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_contradiction": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["is_contradiction", "reason"],
+}
+_CONTRADICTION_REQUIRED_KEYS = {"is_contradiction", "reason"}
 
 # Lazy import sentence-transformers (may be blocked by Windows Application Control)
 _sentence_transformers_available = False
@@ -113,10 +123,21 @@ class ConsistencyAnalyzer:
                 self._embedding_model = SentenceTransformer(self.embedding_model_name)
             return self._embedding_model
         else:
-            # Fallback to TF-IDF
+            # Fallback to TF-IDF. Negation words are deliberately kept out
+            # of the stop-word list -- sklearn's default English stop words
+            # include "not"/"no"/"never", which would make "X shall enable Y"
+            # and "X shall not enable Y" look nearly identical (both routing
+            # to DUPLICATE) instead of flowing into the LLM contradiction
+            # check where they belong.
             if self._tfidf_vectorizer is None:
-                self._tfidf_vectorizer = TfidfVectorizer(stop_words='english')
+                negation_safe_stop_words = frozenset(
+                    TfidfVectorizer(stop_words="english").get_stop_words()
+                ) - {"not", "no", "never", "cannot", "none", "nor"}
+                self._tfidf_vectorizer = TfidfVectorizer(
+                    stop_words=list(negation_safe_stop_words)
+                )
             return self._tfidf_vectorizer
+                            
 
     @property
     def llm_client(self) -> LocalLLMClient:
@@ -175,9 +196,11 @@ class ConsistencyAnalyzer:
                     req_texts[j],
                     similarity,
                 )
-                
+
                 if relationship.relationship_type != RelationshipType.INDEPENDENT:
-                    relationships.append(relationship)
+                    relationships.append(
+                        replace(relationship, req_id_1=req_ids[i], req_id_2=req_ids[j])
+                    )
 
         # Build summary
         summary = {
@@ -262,17 +285,17 @@ class ConsistencyAnalyzer:
 
     def _check_contradiction(self, text1: str, text2: str) -> tuple[bool, str]:
         """Use LLM to check if two requirements contradict each other.
-        
+
         Args:
             text1: First requirement text
             text2: Second requirement text
-            
+
         Returns:
             Tuple of (is_contradiction, reason)
         """
         try:
             self.llm_client.check_reachable()
-            
+
             system_prompt = """You are an expert in aerospace requirements engineering. 
 Analyze whether two requirements contradict each other.
 
@@ -291,20 +314,22 @@ Requirement 2: {text2}
 
 Do these requirements contradict each other?"""
 
-            response = self.llm_client.generate_structured(
+            result = self.llm_client.generate_json(
                 system_prompt,
                 user_prompt,
+                schema=_CONTRADICTION_SCHEMA,
+                required_keys=_CONTRADICTION_REQUIRED_KEYS,
                 temperature=0.1,
             )
 
-            result = response.raw
             is_contradiction = result.get("is_contradiction", False)
             reason = result.get("reason", "No explanation provided")
 
             return is_contradiction, reason
 
         except Exception as exc:
-            # If LLM check fails, disable contradiction checks for this run
-            # and assume no contradiction to avoid false positives
-            self.enable_contradiction_check = False
-            return False, f"LLM check failed (contradiction detection disabled): {exc}"
+            # A single bad/failed response only affects THIS pair -- it must
+            # not disable contradiction checking for the rest of the run,
+            # otherwise one hiccup silently blinds every later pair (e.g. a
+            # real contradiction later in the batch would go unreported).
+            return False, f"LLM check failed for this pair (treated as no contradiction): {exc}"
