@@ -71,7 +71,22 @@ CREATE TABLE IF NOT EXISTS requirements (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS requirement_relationships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    req_id_1 INTEGER NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    req_id_2 INTEGER NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,
+    similarity_score REAL NOT NULL,
+    confidence REAL NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, req_id_1, req_id_2)
+);
+
 CREATE INDEX IF NOT EXISTS idx_requirements_run_id ON requirements(run_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_relationships_run_id ON requirement_relationships(run_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_relationships_req_ids ON requirement_relationships(req_id_1, req_id_2);
 """
 
 
@@ -291,6 +306,71 @@ def get_requirement(conn: sqlite3.Connection, requirement_id: int) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# Consistency Analysis
+# ---------------------------------------------------------------------------
+
+
+def save_requirement_relationship(
+    conn: sqlite3.Connection,
+    run_id: int,
+    req_id_1: int,
+    req_id_2: int,
+    relationship_type: str,
+    similarity_score: float,
+    confidence: float,
+    reason: str | None = None,
+) -> int:
+    """Saves a relationship between two requirements."""
+    cursor = conn.execute(
+        """
+        INSERT OR REPLACE INTO requirement_relationships 
+        (run_id, req_id_1, req_id_2, relationship_type, similarity_score, confidence, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, req_id_1, req_id_2, relationship_type, similarity_score, confidence, reason, _utcnow()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_requirement_relationships(conn: sqlite3.Connection, run_id: int) -> list[dict[str, Any]]:
+    """Retrieves all relationships for a run."""
+    rows = conn.execute(
+        "SELECT * FROM requirement_relationships WHERE run_id = ? ORDER BY similarity_score DESC",
+        (run_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_consistency_summary(conn: sqlite3.Connection, run_id: int) -> dict[str, int]:
+    """Retrieves a summary of consistency analysis for a run."""
+    rows = conn.execute(
+        "SELECT relationship_type, COUNT(*) as count FROM requirement_relationships WHERE run_id = ? GROUP BY relationship_type",
+        (run_id,),
+    ).fetchall()
+    
+    summary = {"duplicate": 0, "similar": 0, "contradiction": 0, "independent": 0}
+    for row in rows:
+        summary[row["relationship_type"]] = row["count"]
+    
+    # Calculate independent pairs
+    run = get_run(conn, run_id)
+    if run:
+        total_reqs = run.get("total_requirements", 0)
+        total_pairs = total_reqs * (total_reqs - 1) // 2
+        total_detected = sum(summary.values())
+        summary["independent"] = max(0, total_pairs - total_detected)
+    
+    return summary
+
+
+def clear_requirement_relationships(conn: sqlite3.Connection, run_id: int) -> None:
+    """Clears all relationships for a run (useful for re-analysis)."""
+    conn.execute("DELETE FROM requirement_relationships WHERE run_id = ?", (run_id,))
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # Excel export
 # ---------------------------------------------------------------------------
 
@@ -335,6 +415,7 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
     recommended rewrite, the 2 alternates, a Needs Review column, and a
     Suggestions column (the recommended candidate's flagged vague terms),
     color-highlighted per row (red = needs review, green = ready).
+    Also includes a consistency analysis sheet if relationships exist.
 
     Raises ValueError if ``run_id`` doesn't exist.
     """
@@ -348,6 +429,8 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
     requirements = get_requirements_for_run(conn, run_id)
 
     workbook = Workbook()
+    
+    # Main Requirements Review Sheet
     sheet = workbook.active
     sheet.title = "Requirements Review"
 
@@ -395,6 +478,60 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
 
     for col_idx, width in enumerate(_COLUMN_WIDTHS, start=1):
         sheet.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # Consistency Analysis Sheet (if relationships exist)
+    relationships = get_requirement_relationships(conn, run_id)
+    if relationships:
+        consistency_sheet = workbook.create_sheet("Consistency Analysis")
+        
+        consistency_headers = [
+            "Req #1", "Req #2", "Relationship Type", 
+            "Similarity Score", "Confidence", "Reason"
+        ]
+        consistency_sheet.append(consistency_headers)
+        
+        for col_idx in range(1, len(consistency_headers) + 1):
+            cell = consistency_sheet.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+        
+        consistency_sheet.column_dimensions["A"].width = 8
+        consistency_sheet.column_dimensions["B"].width = 8
+        consistency_sheet.column_dimensions["C"].width = 18
+        consistency_sheet.column_dimensions["D"].width = 14
+        consistency_sheet.column_dimensions["E"].width = 12
+        consistency_sheet.column_dimensions["F"].width = 50
+        
+        # Build requirement map for display
+        req_map = {req["id"]: req["sequence_in_run"] + 1 for req in requirements}
+        
+        for row_num, rel in enumerate(relationships, start=2):
+            req_1_num = req_map.get(rel["req_id_1"], rel["req_id_1"])
+            req_2_num = req_map.get(rel["req_id_2"], rel["req_id_2"])
+            
+            consistency_sheet.append([
+                f"#{req_1_num}",
+                f"#{req_2_num}",
+                rel["relationship_type"].capitalize(),
+                f"{rel['similarity_score'] * 100:.1f}%",
+                f"{rel['confidence'] * 100:.1f}%",
+                rel["reason"] or "",
+            ])
+            
+            # Color code based on relationship type
+            fill = None
+            if rel["relationship_type"] == "duplicate":
+                fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            elif rel["relationship_type"] == "contradiction":
+                fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            elif rel["relationship_type"] == "similar":
+                fill = PatternFill(start_color="FFE6CC", end_color="FFE6CC", fill_type="solid")
+            
+            if fill:
+                for col_idx in range(1, len(consistency_headers) + 1):
+                    cell = consistency_sheet.cell(row=row_num, column=col_idx)
+                    cell.fill = fill
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

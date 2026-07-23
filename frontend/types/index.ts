@@ -72,3 +72,38 @@ export interface UploadResponse {
   run_id: number;
   status: string;
 }
+
+export interface RequirementDetail {
+  id: number;
+  sequence_in_run: number;
+  recommended_text: string;
+  original_text: string;
+}
+
+export interface RequirementRelationship {
+  id: number;
+  run_id: number;
+  req_id_1: number;
+  req_id_2: number;
+  relationship_type: "duplicate" | "similar" | "contradiction" | "independent";
+  similarity_score: number;
+  confidence: number;
+  reason: string | null;
+  created_at: string;
+  req_1?: RequirementDetail;
+  req_2?: RequirementDetail;
+}
+
+export interface ConsistencySummary {
+  duplicate: number;
+  similar: number;
+  contradiction: number;
+  independent: number;
+}
+
+export interface ConsistencyResponse {
+  run_id: number;
+  total_requirements: number;
+  summary: ConsistencySummary;
+  relationships: RequirementRelationship[];
+}

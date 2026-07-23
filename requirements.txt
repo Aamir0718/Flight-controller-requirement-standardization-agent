@@ -99,3 +99,4 @@ websockets==15.0.1
 wrapt==2.2.2
 xxhash==3.8.1
 zstandard==0.25.0
+scikit-learn==1.5.2

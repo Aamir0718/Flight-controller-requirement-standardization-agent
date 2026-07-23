@@ -28,6 +28,17 @@ pipeline:
   # recommendation instead of setting needs_human_review = true.
   compliance_threshold: 80.0
 
+consistency:
+  # Threshold for marking requirements as duplicates (0.0-1.0)
+  duplicate_threshold: 0.95
+  # Threshold for marking requirements as similar (0.0-1.0)
+  similarity_threshold: 0.80
+  # Sentence transformer model for embeddings (offline, local)
+  # Falls back to TF-IDF if sentence-transformers is unavailable
+  embedding_model: "all-MiniLM-L6-v2"
+  # Enable LLM-based contradiction detection (requires Ollama)
+  enable_contradiction_check: true
+
 ui:
   api_host: "0.0.0.0"
   api_port: 8000

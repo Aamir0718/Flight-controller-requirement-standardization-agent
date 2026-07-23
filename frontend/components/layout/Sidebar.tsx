@@ -12,7 +12,8 @@ import {
   History, 
   Download, 
   Settings,
-  ShieldCheck
+  ShieldCheck,
+  GitBranch
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,7 @@ const navItems = [
   { name: "Processing Status", href: "/processing", icon: Cpu },
   { name: "Requirement Review", href: "/review", icon: FileCheck2 },
   { name: "Comparison Matrix", href: "/compare", icon: Columns3 },
+  { name: "Consistency Analysis", href: "/consistency", icon: GitBranch },
   { name: "Analytics & Reports", href: "/analytics", icon: BarChart3 },
   { name: "Run History", href: "/history", icon: History },
   { name: "Export Center", href: "/export", icon: Download },

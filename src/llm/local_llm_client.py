@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from langchain_core import messages
 import ollama
 
 from config import get_settings
@@ -31,6 +32,27 @@ REQUIRED_KEYS = {"pattern", "rewritten_text", "vague_terms", "confidence", "note
 # OSError from the underlying socket layer.
 _CONNECTIVITY_EXCEPTIONS = (httpx.HTTPError, ConnectionError, OSError)
 
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pattern": {"type": "string"},
+        "rewritten_text": {"type": "string"},
+        "vague_terms": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "term": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+                "required": ["term", "suggestion"],
+            },
+        },
+        "confidence": {"type": "number"},
+        "notes": {"type": "string"},
+    },
+    "required": ["pattern", "rewritten_text", "vague_terms", "confidence", "notes"],
+}
 
 class OllamaUnavailableError(RuntimeError):
     """Raised when the configured local Ollama instance cannot be reached.
@@ -149,14 +171,15 @@ class LocalLLMClient:
         seed: int | None = None,
     ) -> str:
         options: dict[str, Any] = {
-            "temperature": self.temperature if temperature is None else temperature
+            "temperature": self.temperature if temperature is None else temperature,
+            "num_predict": 1024,
         }
         if seed is not None:
             options["seed"] = seed
         response = self._client.chat(
             model=self.model,
             messages=messages,
-            format="json",
+            format=RESPONSE_SCHEMA,
             options=options,
         )
         return response["message"]["content"]
@@ -164,10 +187,44 @@ class LocalLLMClient:
     @staticmethod
     def _try_parse(raw_text: str) -> dict[str, Any] | None:
         text = _JSON_FENCE.sub("", raw_text.strip()).strip()
+
+        # Find the matching close-brace for the first '{', tracking whether
+        # we're inside a JSON string so that '{'/'}' characters that are part
+        # of a string's *content* (e.g. stray text a model appended inside a
+        # "notes" value) don't get miscounted as structural braces.
+        brace_count = 0
+        json_end = -1
+        in_string = False
+        escape_next = False
+        for i, char in enumerate(text):
+            if in_string:
+                if escape_next:
+                    escape_next = False
+                elif char == '\\':
+                    escape_next = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    json_end = i + 1
+                    break
+
+        if json_end > 0:
+            text = text[:json_end]
+
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    # ...rest of the method (schema validation) stays exactly the same...
 
         if not isinstance(data, dict) or not REQUIRED_KEYS.issubset(data.keys()):
             return None

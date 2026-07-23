@@ -16,6 +16,10 @@ import {
   InvalidExcelErrorCard,
   isInvalidExcelError,
 } from "@/components/errors/InvalidExcelErrorCard";
+import {
+  AIErrorCard,
+  isAIError,
+} from "@/components/errors/AIErrorCard";
 import { useActiveRun } from "@/context/ActiveRunContext";
 import { ProcessingEmptyState } from "@/components/empty-states/ProcessingEmptyState";
 
@@ -155,7 +159,14 @@ function ProcessingContent() {
         <InvalidExcelErrorCard />
       )}
 
-      {isFailed && !isInvalidExcelError(run?.error_message) && (
+      {isFailed && isAIError(run?.error_message) && (
+        <AIErrorCard 
+          errorCode={run?.error_message}
+          onRetry={() => router.push("/upload")}
+        />
+      )}
+
+      {isFailed && !isInvalidExcelError(run?.error_message) && !isAIError(run?.error_message) && (
         <div className="drdo-card p-6 border-[#FF4D4F]/40 bg-[#FF4D4F]/5 space-y-4">
           <div className="flex items-start gap-3">
             <ShieldAlert className="w-5 h-5 text-[#FF4D4F] flex-shrink-0 mt-0.5" />

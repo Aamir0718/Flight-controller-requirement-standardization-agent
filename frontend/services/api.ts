@@ -1,5 +1,5 @@
 import axios from "axios";
-import { HealthResponse, Requirement, Run, UploadResponse } from "@/types";
+import { HealthResponse, Requirement, Run, UploadResponse, ConsistencyResponse } from "@/types";
 
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -38,6 +38,16 @@ export const apiService = {
 
   async getRunRequirements(runId: number): Promise<Requirement[]> {
     const { data } = await apiClient.get<Requirement[]>(`/runs/${runId}/requirements`);
+    return data;
+  },
+
+  async getRunConsistency(runId: number): Promise<ConsistencyResponse> {
+    const { data } = await apiClient.get<ConsistencyResponse>(`/runs/${runId}/consistency`);
+    return data;
+  },
+
+  async reanalyzeConsistency(runId: number): Promise<{ message: string; summary: Record<string, number>; relationships_count: number }> {
+    const { data } = await apiClient.post(`/runs/${runId}/reanalyze-consistency`);
     return data;
   },
 

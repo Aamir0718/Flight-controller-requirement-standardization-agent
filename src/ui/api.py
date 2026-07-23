@@ -13,6 +13,7 @@ Run it (binds to loopback by default, matching the offline requirement):
 """
 
 from __future__ import annotations
+import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from dataclasses import asdict
@@ -23,6 +24,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 import storage.db as db
+from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
 from llm.local_llm_client import LocalLLMClient
 from pipeline.graph import build_graph, run_requirement
@@ -70,6 +72,13 @@ INVALID_EXCEL_FILE = "INVALID_EXCEL_FILE"
 PARSE_ERROR = "PARSE_ERROR"
 INVALID_FILE_TYPE = "INVALID_FILE_TYPE"
 
+# LLM-related error codes
+AI_SERVICE_UNAVAILABLE = "AI_SERVICE_UNAVAILABLE"
+AI_RESPONSE_VALIDATION_FAILED = "AI_RESPONSE_VALIDATION_FAILED"
+AI_REQUEST_TIMEOUT = "AI_REQUEST_TIMEOUT"
+AI_MODEL_NOT_FOUND = "AI_MODEL_NOT_FOUND"
+AI_UNKNOWN_ERROR = "AI_UNKNOWN_ERROR"
+
 
 def _error_code_for_parse_issues(issues: list) -> str:
     """Maps parser-reported workbook issues to a frontend-friendly error code."""
@@ -85,7 +94,8 @@ def _error_code_for_parse_issues(issues: list) -> str:
 
 
 def _error_code_for_exception(exc: Exception) -> str | None:
-    """Maps parse-related exceptions to friendly codes; None preserves legacy formatting."""
+    """Maps parse-related and LLM exceptions to friendly codes; None preserves legacy formatting."""
+    # Excel parsing errors
     if isinstance(exc, BadZipFile):
         return INVALID_EXCEL_FILE
 
@@ -98,6 +108,16 @@ def _error_code_for_exception(exc: Exception) -> str | None:
         return PARSE_ERROR
     if "bad zip" in message or "not a zip file" in message:
         return INVALID_EXCEL_FILE
+
+    # LLM-related errors
+    if exc_name == "OllamaUnavailableError":
+        return AI_SERVICE_UNAVAILABLE
+    if exc_name == "LLMResponseError":
+        return AI_RESPONSE_VALIDATION_FAILED
+    if "timeout" in message or "timed out" in message:
+        return AI_REQUEST_TIMEOUT
+    if "model not found" in message or "model" in message and "not" in message:
+        return AI_MODEL_NOT_FOUND
 
     return None
 
@@ -138,13 +158,67 @@ def _process_run(run_id: int, file_path: Path) -> None:
             )
             db.save_requirement(conn, run_id, i, result)
 
+        # Run consistency analysis after all requirements are processed
+        _run_consistency_analysis(conn, run_id)
+
         db.update_run_status(conn, run_id, "completed")
     except Exception as exc:  # noqa: BLE001 -- always record, a background task must not fail silently
         friendly_code = _error_code_for_exception(exc)
-        error_message = friendly_code if friendly_code else f"{type(exc).__name__}: {exc}"
+        
+        # Log full technical error for debugging
+        import traceback
+        print(f"Error processing run {run_id}: {exc}")
+        traceback.print_exc()
+        
+        # Store user-friendly error code in database
+        error_message = friendly_code if friendly_code else AI_UNKNOWN_ERROR
         db.update_run_status(conn, run_id, "failed", error_message=error_message)
     finally:
         conn.close()
+
+
+def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> None:
+    """Runs consistency analysis on all requirements in a run.
+    
+    This is called after all requirements have been processed.
+    Failures here should not fail the entire run - we log and continue.
+    """
+    try:
+        requirements = db.get_requirements_for_run(conn, run_id)
+        if len(requirements) < 2:
+            return  # Not enough requirements to analyze
+
+        # Prepare requirements for analysis
+        req_data = [{"id": req["id"], "recommended_text": req["recommended_text"]} for req in requirements]
+
+        # Run consistency analysis
+        analyzer = ConsistencyAnalyzer()
+        result = analyzer.analyze_requirements(run_id, req_data)
+
+        # Save relationships to database
+        for rel in result.relationships:
+            # Map relationship data to actual requirement IDs
+            req_id_1 = req_data[rel.req_id_1]["id"]
+            req_id_2 = req_data[rel.req_id_2]["id"]
+            
+            db.save_requirement_relationship(
+                conn,
+                run_id,
+                req_id_1,
+                req_id_2,
+                rel.relationship_type.value,
+                rel.similarity_score,
+                rel.confidence,
+                rel.reason,
+            )
+
+        print(f"Consistency analysis completed for run {run_id}: {len(result.relationships)} relationships found")
+
+    except Exception as exc:  # noqa: BLE001 -- consistency analysis failure should not fail the run
+        # Log the error but don't fail the entire run
+        print(f"Consistency analysis failed for run {run_id}: {exc}")
+        import traceback
+        traceback.print_exc()
 
 
 @app.post("/upload")
@@ -251,3 +325,82 @@ def download_run(run_id: int) -> FileResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=export_path.name,
     )
+
+
+@app.get("/runs/{run_id}/consistency")
+def get_run_consistency(run_id: int) -> dict:
+    """Returns consistency analysis results for a run."""
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        
+        relationships = db.get_requirement_relationships(conn, run_id)
+        summary = db.get_consistency_summary(conn, run_id)
+        
+        # Get requirement details for the relationships
+        requirements_map = {}
+        for req in db.get_requirements_for_run(conn, run_id):
+            requirements_map[req["id"]] = {
+                "id": req["id"],
+                "sequence_in_run": req["sequence_in_run"],
+                "recommended_text": req["recommended_text"],
+                "original_text": req["original_text"],
+            }
+        
+        # Enrich relationships with requirement details
+        enriched_relationships = []
+        for rel in relationships:
+            req_1 = requirements_map.get(rel["req_id_1"])
+            req_2 = requirements_map.get(rel["req_id_2"])
+            
+            if req_1 and req_2:
+                enriched_relationships.append({
+                    **rel,
+                    "req_1": req_1,
+                    "req_2": req_2,
+                })
+        
+        return {
+            "run_id": run_id,
+            "total_requirements": run.get("total_requirements", 0),
+            "summary": summary,
+            "relationships": enriched_relationships,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/runs/{run_id}/reanalyze-consistency")
+def reanalyze_consistency(run_id: int) -> dict:
+    """Triggers re-analysis of consistency for a run."""
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        if run["status"] != "completed":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Run {run_id} must be completed before re-analyzing consistency.",
+            )
+        
+        # Clear existing relationships
+        db.clear_requirement_relationships(conn, run_id)
+        
+        # Re-run consistency analysis
+        _run_consistency_analysis(conn, run_id)
+        
+        # Return updated results
+        relationships = db.get_requirement_relationships(conn, run_id)
+        summary = db.get_consistency_summary(conn, run_id)
+        
+        return {
+            "run_id": run_id,
+            "message": "Consistency analysis completed",
+            "summary": summary,
+            "relationships_count": len(relationships),
+        }
+    finally:
+        conn.close()
