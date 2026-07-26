@@ -7,6 +7,7 @@
 
 2. Start Backend:
   python -m venv .venv
+  optional: Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
   .\.venv\Scripts\activate
   pip install --no-index --find-links=offline_packages -r requirements.txt
   scripts\run_api.ps1
