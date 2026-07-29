@@ -1,61 +1,18 @@
-# DRDO Flight Controller Requirement Standardization Agent
-## Offline Setup Guide (Air-Gapped Environment)
+# Running the Project (Offline)
 
-
-1. Start Ollama:
-   ollama serve
-
-2. Start Backend:
-  python -m venv .venv
-  optional: Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-  .\.venv\Scripts\activate
-  pip install --no-index --find-links=offline_packages -r requirements.txt
-  scripts\run_api.ps1
-
-
-3. Start Frontend:
-   cd frontend
-   npm start
-
-
-This guide explains how to run the project on a computer **without internet access**.
+Open **3 terminals**.
 
 ---
 
-# Prerequisites
+# Terminal 1 — Ollama
 
-Ensure the offline machine already has:
-
-- Python 3.11.x installed
-- Ollama installed
-- Required Ollama model available
-  - gemma3:4b (Recommended)
-  - OR llama3.1
-- Git (optional)
-- Node.js (only if frontend needs to be started)
-
----
-
-
-# Step 1 — Open three terminals
-
-You will need three terminals.
-
------------------------------------------
-Terminal 1 : Ollama
------------------------------------------
-
-Start Ollama.
+Start the Ollama server.
 
 ```bash
 ollama serve
 ```
 
-Leave this terminal running.
-
-(Optional)
-
-Verify installed models:
+(Optional) Verify the model is available.
 
 ```bash
 ollama list
@@ -63,15 +20,21 @@ ollama list
 
 Expected model:
 
-- gemma3:4b
+```
+gemma3:4b
+```
 
 or
 
-- llama3.1
+```
+llama3.1
+```
+
+Leave this terminal running.
 
 ---
 
-# Step 2 — Backend
+# Terminal 2 — Backend
 
 Navigate to the project.
 
@@ -79,72 +42,89 @@ Navigate to the project.
 cd Flight-controller-requirement-standardization-agent
 ```
 
-Create a virtual environment.
+Create a virtual environment (only the first time).
 
 ```powershell
 python -m venv .venv
 ```
 
-Activate it.
+If PowerShell blocks activation, run:
 
 ```powershell
-.\.venv\Scripts\activate
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 ```
 
-Install dependencies **without internet**.
+Activate the virtual environment.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Install Python dependencies (only the first time).
 
 ```powershell
 pip install --no-index --find-links=offline_packages -r requirements.txt
 ```
 
-Run the backend.
+Start the backend.
 
 ```powershell
 scripts\run_api.ps1
 ```
 
-Backend should start on:
+Backend URL:
 
 ```
 http://127.0.0.1:8008
 ```
 
-Verify:
-
-```
-FastAPI : Online (8008)
-```
-
 ---
 
-# Step 3 — Frontend
+# Terminal 3 — Frontend
 
-Open another terminal.
-
-Navigate to frontend.
+Navigate to the frontend.
 
 ```powershell
 cd frontend
 ```
 
-Start frontend.
+> **Important:** Before running the frontend on an offline machine, copy the following folders from the development machine into the `frontend` directory:
+>
+> - `node_modules/`
+> - `.next/`
 
-Production:
+Start the frontend.
 
 ```powershell
 npm start
 ```
 
-If production is unavailable:
+If needed:
 
 ```powershell
 npm run dev
 ```
 
-Frontend should open on:
+Frontend URL:
 
 ```
 http://localhost:3000
 ```
 
 ---
+
+# Verify
+
+All three terminals should now be running:
+
+- ✅ Terminal 1 → Ollama
+- ✅ Terminal 2 → FastAPI Backend (Port 8008)
+- ✅ Terminal 3 → Next.js Frontend (Port 3000)
+
+Open:
+
+```
+http://localhost:3000
+```
+
+The application is now ready to use.
