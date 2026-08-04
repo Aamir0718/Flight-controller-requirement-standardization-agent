@@ -51,7 +51,7 @@ export default function UploadPage() {
       setActiveRunId(response.run_id);
       router.push("/processing");
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Upload failed. Please ensure the backend is running.");
+      setError(err.message || "Upload failed. Please ensure the backend is running.");
       setIsUploading(false);
     }
   };

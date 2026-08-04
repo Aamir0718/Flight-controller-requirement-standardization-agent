@@ -70,8 +70,9 @@ export default function ConsistencyPage() {
     try {
       await apiService.reanalyzeConsistency(activeRunId);
       refetch();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to reanalyze consistency:", error);
+      alert(error.message || "Failed to reanalyze consistency. Please try again.");
     }
   };
 

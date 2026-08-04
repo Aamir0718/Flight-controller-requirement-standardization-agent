@@ -9,6 +9,40 @@ const apiClient = axios.create({
   timeout: 30000,
 });
 
+// Add better error handling with detailed messages
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.code === 'ECONNABORTED') {
+      error.message = 'Request timeout. The backend took too long to respond.';
+    } else if (error.response) {
+      // Server responded with error status
+      const status = error.response.status;
+      const detail = error.response.data?.detail;
+      
+      if (status === 404) {
+        error.message = detail || 'API endpoint not found. Please check if the backend is running the correct version.';
+      } else if (status === 500) {
+        error.message = detail || 'Internal server error. Check the backend logs for details.';
+      } else if (status === 400) {
+        error.message = detail || 'Invalid request. Please check your input.';
+      } else if (status === 409) {
+        error.message = detail || 'Conflict. The resource is not in the required state.';
+      } else {
+        error.message = detail || `Server error (${status}). Please try again.`;
+      }
+    } else if (error.request) {
+      // Request made but no response received
+      error.message = 'Unable to connect to backend. Please ensure the FastAPI server is running on http://127.0.0.1:8000';
+    } else {
+      // Something else happened
+      error.message = error.message || 'An unexpected error occurred.';
+    }
+    
+    return Promise.reject(error);
+  }
+);
+
 export const apiService = {
   async getHealth(): Promise<HealthResponse> {
     const { data } = await apiClient.get<HealthResponse>("/health");

@@ -61,7 +61,7 @@ export function TopNav() {
           ) : apiOnline ? (
             <span className="flex items-center gap-1.5 text-[#00C853] font-semibold">
               <span className="w-2 h-2 rounded-full bg-[#00C853] animate-pulse"></span>
-              Online (8008)
+              Online (8000)
             </span>
           ) : (
             <span className="flex items-center gap-1.5 text-[#FF4D4F] font-semibold">
