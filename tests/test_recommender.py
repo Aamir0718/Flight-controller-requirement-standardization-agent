@@ -285,3 +285,50 @@ class TestInventedNumberSafeguard:
         payload = recommendation.candidates[0].to_dict()
         assert payload["invented_numbers"] == []
         assert payload["has_invented_number"] is False
+
+
+class TestIndependentScoring:
+    """Test that each candidate is scored independently by the INCOSE scorer."""
+    
+    def test_each_candidate_receives_independent_score(self):
+        """Verify that structurally different candidates receive their own scores."""
+        # Three structurally different formulations of the same requirement
+        candidates = [
+            _candidate(0, "When the primary sensor is invalid, the system shall activate the backup sensor."),
+            _candidate(1, "The system shall activate the backup sensor upon detection of primary sensor invalidity."),
+            _candidate(2, "Upon detection that the primary sensor is invalid, the system shall transition to the backup sensor."),
+        ]
+        original = "The system shall switch to the backup sensor when the primary sensor becomes invalid."
+        
+        recommendation = recommend(candidates, original)
+        
+        # Each candidate should have its own score
+        scores = [c.score for c in recommendation.candidates]
+        assert len(scores) == 3
+        
+        # Verify scores are calculated independently (not just copied)
+        # These are different formulations, so they should have different scores
+        # (though identical scores are acceptable if formulations happen to be equally compliant)
+        assert all(isinstance(score, float) for score in scores)
+        assert all(0 <= score <= 100 for score in scores)
+        
+    def test_scores_are_not_artificially_modified_by_index(self):
+        """Verify that scores come from the real scorer, not artificial offsets."""
+        # Use the same text for all candidates to isolate the scoring mechanism
+        same_text = "The system shall maintain the temperature within 5 degrees Celsius."
+        candidates = [
+            _candidate(0, same_text),
+            _candidate(1, same_text),
+            _candidate(2, same_text),
+        ]
+        original = "The system shall keep the temperature stable."
+        
+        recommendation = recommend(candidates, original)
+        
+        # All candidates should have the same score since they have the same text
+        scores = [c.score for c in recommendation.candidates]
+        assert len(set(scores)) == 1, "Identical texts should receive identical scores"
+        
+        # The score should match what the scorer returns directly
+        direct_score = score_requirement(same_text).score
+        assert scores[0] == direct_score

@@ -27,8 +27,9 @@ NUM_CANDIDATES = 3
 # slot (clamped to MAX_TEMPERATURE) and a distinct seed per slot, so
 # candidate generation is reproducible run-to-run against the same model
 # while still sampling 3 meaningfully different completions.
-TEMPERATURE_OFFSETS: tuple[float, ...] = (0.0, 0.2, 0.4)
-SEEDS: tuple[int, ...] = (0, 1, 2)
+# Use higher temperature offsets to encourage more structural diversity.
+TEMPERATURE_OFFSETS: tuple[float, ...] = (0.0, 0.4, 0.8)
+SEEDS: tuple[int, ...] = (0, 42, 999)
 MAX_TEMPERATURE = 1.0
 
 
@@ -56,11 +57,13 @@ def generate_candidates(
     fails -- a partial candidate set is not a useful result, so this does
     not swallow errors from individual calls.
     """
-    bundle = build_prompt(requirement_text, flags, ears_pattern=ears_pattern)
     base_temperature = client.temperature
 
     candidates: list[Candidate] = []
     for i in range(num_candidates):
+        # Build a fresh prompt for each candidate with call-specific instructions
+        bundle = build_prompt(requirement_text, flags, ears_pattern=ears_pattern, candidate_index=i)
+        
         temperature = min(
             base_temperature + TEMPERATURE_OFFSETS[i % len(TEMPERATURE_OFFSETS)],
             MAX_TEMPERATURE,

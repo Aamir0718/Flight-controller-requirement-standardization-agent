@@ -42,6 +42,11 @@ const QUICK_TIPS = [
 
 export default function DashboardPage() {
   const selectRun = useSelectRun();
+  const { data: healthData } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => apiService.getHealth(),
+    refetchInterval: 30000,
+  });
   const {
     data: runs = [],
     isPending,
@@ -147,7 +152,7 @@ export default function DashboardPage() {
               <Cpu className="w-5 h-5" />
             </div>
           </div>
-          <div className="text-xl font-bold font-mono text-[#F5F7FA]">gemma3:4b</div>
+          <div className="text-xl font-bold font-mono text-[#F5F7FA]">{healthData?.model || "Loading..."}</div>
           <p className="text-xs text-[#8FA3BF]">Local Ollama offline server</p>
         </motion.div>
 

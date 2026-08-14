@@ -28,6 +28,7 @@ from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
 from llm.local_llm_client import LocalLLMClient
 from pipeline.graph import build_graph, run_requirement
+from config import get_settings
 
 app = FastAPI(title="Flight Controller Requirements Agent")
 app.add_middleware(
@@ -126,7 +127,8 @@ def _error_code_for_exception(exc: Exception) -> str | None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    settings = get_settings()
+    return {"status": "ok", "model": settings["ollama"]["model"]}
 
 
 def _process_run(run_id: int, file_path: Path) -> None:
@@ -169,8 +171,14 @@ def _process_run(run_id: int, file_path: Path) -> None:
         
         # Log full technical error for debugging
         import traceback
-        print(f"Error processing run {run_id}: {exc}")
-        traceback.print_exc()
+        import sys
+        try:
+            print(f"Error processing run {run_id}: {exc}")
+            traceback.print_exc()
+        except UnicodeEncodeError:
+            # Fallback for Windows console encoding issues
+            print(f"Error processing run {run_id}: {repr(exc)}")
+            traceback.print_exc(file=sys.stderr)
         
         # Store user-friendly error code in database
         error_message = friendly_code if friendly_code else AI_UNKNOWN_ERROR
@@ -190,7 +198,13 @@ def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> None:
         if len(requirements) < 2:
             return  # Not enough requirements to analyze
 
+        # Clear any existing relationships for this run to avoid stale data
+        conn.execute("DELETE FROM requirement_relationships WHERE run_id = ?", (run_id,))
+        conn.commit()
+
         # Prepare requirements for analysis
+        # Note: We use the database auto-increment ID here for analysis,
+        # but will convert to sequence_in_run for display to avoid showing stale IDs
         req_data = [{"id": req["id"], "recommended_text": req["recommended_text"]} for req in requirements]
 
         # Run consistency analysis
@@ -351,16 +365,24 @@ def get_run_consistency(run_id: int) -> dict:
             }
         
         # Enrich relationships with requirement details
+        # Map database IDs to sequence_in_run for display to avoid showing stale/incorrect IDs
         enriched_relationships = []
         for rel in relationships:
             req_1 = requirements_map.get(rel["req_id_1"])
             req_2 = requirements_map.get(rel["req_id_2"])
             
             if req_1 and req_2:
+                # Use sequence_in_run for display IDs (0-based, so add 1 for 1-based display)
                 enriched_relationships.append({
                     **rel,
-                    "req_1": req_1,
-                    "req_2": req_2,
+                    "req_1": {
+                        **req_1,
+                        "display_id": req_1["sequence_in_run"] + 1,  # Convert to 1-based for display
+                    },
+                    "req_2": {
+                        **req_2,
+                        "display_id": req_2["sequence_in_run"] + 1,  # Convert to 1-based for display
+                    },
                 })
         
         return {

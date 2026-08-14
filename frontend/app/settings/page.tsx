@@ -1,20 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, Server, Cpu, Database, ShieldCheck, Save } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Settings, Server, Cpu, Database, ShieldCheck } from "lucide-react";
+import { apiService } from "@/services/api";
 
 export default function SettingsPage() {
+  const { data: healthData } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => apiService.getHealth(),
+    refetchInterval: 30000,
+  });
+  
   const [apiUrl, setApiUrl] = useState(
     process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
   );
-  const [modelName, setModelName] = useState("gemma3:4b");
-  const [saved, setSaved] = useState(false);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-  };
+  const modelName = healthData?.model || "Loading...";
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 select-none py-4">
@@ -29,7 +31,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSave} className="space-y-6">
+      <div className="space-y-6">
         {/* API Settings */}
         <div className="drdo-card p-6 space-y-4">
           <h2 className="text-sm font-bold text-[#F5F7FA] flex items-center gap-2 border-b border-[#243244] pb-3">
@@ -64,14 +66,11 @@ export default function SettingsPage() {
             <label className="text-xs font-semibold text-[#8FA3BF]">
               Local Ollama Model Name
             </label>
-            <input
-              type="text"
-              value={modelName}
-              onChange={(e) => setModelName(e.target.value)}
-              className="w-full bg-[#142036] border border-[#243244] rounded-xl px-4 py-2.5 text-xs font-mono text-[#F5F7FA] focus:outline-none focus:border-[#1EA7FF]"
-            />
+            <div className="w-full bg-[#142036] border border-[#243244] rounded-xl px-4 py-2.5 text-xs font-mono text-[#F5F7FA]">
+              {modelName}
+            </div>
             <p className="text-[11px] text-[#8FA3BF]">
-              Configured model in <code className="text-[#1EA7FF]">config/settings.yaml</code>.
+              Configured model in <code className="text-[#1EA7FF]">config/settings.yaml</code>. To change, edit the configuration file and restart the backend.
             </p>
           </div>
         </div>
@@ -84,22 +83,14 @@ export default function SettingsPage() {
           </span>
         </div>
 
-        {/* Save Button */}
-        <div className="flex items-center gap-3">
-          <button
-            type="submit"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#1EA7FF] hover:bg-[#008ee6] text-white font-semibold text-sm shadow-lg shadow-[#1EA7FF]/20 transition"
-          >
-            <Save className="w-4 h-4" />
-            <span>Save Configuration</span>
-          </button>
-          {saved && (
-            <span className="text-xs font-semibold text-[#00C853] animate-pulse">
-              Configuration Saved!
-            </span>
-          )}
+        {/* Info Note */}
+        <div className="p-4 rounded-xl bg-[#FFB300]/10 border border-[#FFB300]/30 flex items-center gap-3 text-xs text-[#FFB300]">
+          <ShieldCheck className="w-5 h-5 flex-shrink-0" />
+          <span>
+            Model configuration is read-only from the backend. To change the model, edit <code className="text-[#1EA7FF]">config/settings.yaml</code> and restart the backend.
+          </span>
         </div>
-      </form>
+      </div>
     </div>
   );
 }

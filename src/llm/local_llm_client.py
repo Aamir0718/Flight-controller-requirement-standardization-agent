@@ -261,7 +261,19 @@ class LocalLLMClient:
 
     @staticmethod
     def _try_parse_generic(raw_text: str, required_keys: set[str]) -> dict[str, Any] | None:
+        # Remove markdown code fences
         text = _JSON_FENCE.sub("", raw_text.strip()).strip()
+
+        # Replace common non-ASCII characters with ASCII equivalents BEFORE brace counting
+        # gemma3:4b sometimes uses smart quotes and other non-ASCII characters
+        # This must happen BEFORE we count braces, or smart quotes will confuse the parser
+        text = text.replace('\u2018', "'").replace('\u2019', "'").replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2013', '-').replace('\u2014', '-').replace('\u00b1', '+/-')
+        text = text.strip()
+
+        # Remove ALL remaining non-ASCII characters (hallucinated Bengali chars, etc.)
+        text = ''.join(char for char in text if ord(char) < 128)
+        text = text.strip()
 
         # Find the matching close-brace for the first '{', tracking whether
         # we're inside a JSON string so that '{'/'}' characters that are part
@@ -294,10 +306,36 @@ class LocalLLMClient:
         if json_end > 0:
             text = text[:json_end]
 
+        # Strip any trailing whitespace and stray characters after the JSON object
+        text = text.strip()
+        # Remove any trailing characters after the last closing brace
+        # The model sometimes adds extra quotes, newlines, or other junk after the JSON
+        # Find the last closing brace and keep everything up to and including it
+        last_brace_idx = text.rfind('}')
+        if last_brace_idx != -1:
+            text = text[:last_brace_idx + 1]
+        text = text.strip()
+
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            return None
+            # Try to fix common JSON errors: trailing quotes in string values
+            # The model sometimes writes: "notes": "text""}
+            # instead of: "notes": "text"}
+            # Find and fix such patterns
+            fixed_text = re.sub(r'""\s*\}', '"}', text)
+            fixed_text = re.sub(r"''\s*\}", "'}", fixed_text)
+            try:
+                data = json.loads(fixed_text)
+            except json.JSONDecodeError:
+                return None
+
+        # Handle case where JSON is returned as a string instead of an object
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return None
 
         if not isinstance(data, dict) or not required_keys.issubset(data.keys()):
             return None

@@ -75,9 +75,10 @@ def test_temperature_and_seed_vary_across_calls_not_identical():
     # The whole point of varying these is that the 3 calls are NOT identical.
     assert len(set(temperatures)) > 1
     assert len(set(seeds)) > 1
-    assert temperatures == [
-        min(0.2 + offset, MAX_TEMPERATURE) for offset in TEMPERATURE_OFFSETS
-    ]
+    # Check that temperatures match the expected offsets
+    expected_temps = [min(0.2 + offset, MAX_TEMPERATURE) for offset in TEMPERATURE_OFFSETS]
+    assert temperatures == expected_temps
+    # Check that seeds match the expected values
     assert seeds == list(SEEDS)
 
 
@@ -93,12 +94,41 @@ def test_all_calls_reuse_the_same_prompt():
     client = FakeLLMClient([_result(f"v{i}") for i in range(3)])
     generate_candidates(client, REQUIREMENT, flags=[])
     system_prompts = {call["system_prompt"] for call in client.calls}
-    user_prompts = {call["user_prompt"] for call in client.calls}
+    # System prompts should be the same (they all have the same structural guidance)
     assert len(system_prompts) == 1
-    assert len(user_prompts) == 1
+    # User prompts should differ (they have call-specific structural instructions)
+    user_prompts = [call["user_prompt"] for call in client.calls]
+    assert len(user_prompts) == 3
+    # Each user prompt should have call-specific guidance
+    assert any("Candidate 1" in p for p in user_prompts)
+    assert any("Candidate 2" in p for p in user_prompts)
+    assert any("Candidate 3" in p for p in user_prompts)
 
 
 def test_num_candidates_override():
     client = FakeLLMClient([_result(f"v{i}") for i in range(5)])
     candidates = generate_candidates(client, REQUIREMENT, flags=[], num_candidates=5)
     assert len(candidates) == 5
+
+
+def test_candidates_are_not_identical():
+    """Test that candidates are structurally different, not identical copies."""
+    # Simulate a scenario where the fake client returns slightly different texts
+    # to verify the system can handle diverse candidates
+    results = [
+        _result("When the primary sensor is invalid, the system shall activate the backup sensor."),
+        _result("The system shall activate the backup sensor upon detection of primary sensor invalidity."),
+        _result("Upon detection that the primary sensor is invalid, the system shall transition to the backup sensor."),
+    ]
+    client = FakeLLMClient(results)
+    candidates = generate_candidates(client, REQUIREMENT, flags=[])
+    
+    # Verify we get 3 candidates
+    assert len(candidates) == 3
+    
+    # Verify they are not identical
+    candidate_texts = [c.result.rewritten_text for c in candidates]
+    assert len(set(candidate_texts)) == 3, "All candidates should be different"
+    
+    # Verify indices are preserved
+    assert [c.index for c in candidates] == [0, 1, 2]

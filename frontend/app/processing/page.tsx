@@ -28,6 +28,12 @@ function ProcessingContent() {
   const { activeRunId } = useActiveRun();
   const runId = activeRunId;
 
+  const { data: healthData } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => apiService.getHealth(),
+    refetchInterval: 30000,
+  });
+
   const { data: run, isError } = useQuery({
     queryKey: ["run_status", runId],
     queryFn: () => apiService.getRunStatus(runId!),
@@ -181,7 +187,7 @@ function ProcessingContent() {
           <div className="p-4 rounded-xl bg-[#0F172A] border border-[#243244] text-xs space-y-2">
             <div className="font-semibold text-[#F5F7FA]">Resolution Steps:</div>
             <ul className="list-disc list-inside space-y-1 text-[#8FA3BF]">
-              <li>If the model was not found, run <code className="text-[#1EA7FF]">ollama pull gemma3:4b</code> or <code className="text-[#1EA7FF]">ollama pull llama3.1</code>.</li>
+              <li>If the model was not found, run <code className="text-[#1EA7FF]">ollama pull {healthData?.model || "your-model"}</code>.</li>
               <li>Ensure local Ollama service is active (<code className="text-[#1EA7FF]">ollama serve</code>).</li>
               <li>Confirm the spreadsheet is a valid <code className="text-[#1EA7FF]">.xlsx</code> file.</li>
             </ul>

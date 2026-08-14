@@ -66,6 +66,7 @@ export interface Run {
 
 export interface HealthResponse {
   status: string;
+  model: string;
 }
 
 export interface UploadResponse {
@@ -78,6 +79,7 @@ export interface RequirementDetail {
   sequence_in_run: number;
   recommended_text: string;
   original_text: string;
+  display_id?: number;
 }
 
 export interface RequirementRelationship {

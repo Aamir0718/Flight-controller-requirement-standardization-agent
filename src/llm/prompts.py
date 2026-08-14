@@ -63,10 +63,20 @@ system/software requirement so it is EARS-compliant and satisfies the cited INCO
 while preserving the original requirement's intent exactly -- you are fixing how it is \
 written, not changing what the system is supposed to do.
 
+CRITICAL: This prompt will be called multiple times for the same requirement. Each call \
+MUST produce a GENUINELY DIFFERENT candidate. The candidates should differ in BOTH sentence \
+structure AND INCOSE rule compliance characteristics (e.g., one might be more concise, one more \
+explicit, one might avoid certain problematic patterns).
+
+MANDATORY: Each call must follow the specific structural guidance in the user prompt.
+
+FORBIDDEN: Do not produce candidates that only differ by 1-2 words. Do not reuse the same \
+sentence structure across different calls. Do not produce candidates that all pass/fail the exact same INCOSE rules.
+
 Rules for your response:
 1. Choose the single EARS pattern (from the pattern set below) that best fits the \
 requirement's intent, and rewrite the requirement to conform to that pattern's syntax \
-template exactly.
+template exactly. Use the sentence structure specified in the user prompt.
 2. Apply only the cited INCOSE rules below. Do not invent additional rules.
 3. For every vague/unmeasurable term you flag, produce a plain-language SUGGESTION of what \
 kind of information is missing (e.g. "specify a maximum response time in milliseconds", \
@@ -84,6 +94,8 @@ after it -- matching exactly this schema:
   "confidence": <number between 0 and 1>,
   "notes": "<any other observations a human reviewer should know>"
 }
+
+Follow the structural pattern specified in the user prompt exactly.
 """
 
 
@@ -186,6 +198,7 @@ def build_prompt(
     flags: Iterable,
     ears_pattern: str | None = None,
     max_fewshot_examples: int = MAX_FEWSHOT_EXAMPLES,
+    candidate_index: int = 0,
 ) -> PromptBundle:
     """Builds the system_prompt/user_prompt pair for one requirement.
 
@@ -196,6 +209,8 @@ def build_prompt(
     ``ears_pattern`` is the first-guess classification from
     src/rules/ears_classifier.py, if available; passed through as context
     only, not enforced.
+    ``candidate_index`` is 0, 1, or 2 for the three candidate calls -- used
+    to give call-specific instructions about structural variation.
     """
     ears_patterns = load_ears_patterns()
     selected_rules = select_relevant_rules(flags)
@@ -216,6 +231,27 @@ def build_prompt(
     if ears_pattern:
         user_prompt_parts.append(f"First-guess EARS pattern classification: {ears_pattern}")
     user_prompt_parts.append(f'Requirement to rewrite:\n"{requirement_text}"')
+    
+    # Add call-specific structural guidance
+    if candidate_index == 0:
+        user_prompt_parts.append(
+            "\nFor this call (Candidate 1): Use a standard \"When [condition], the system shall [response]\" structure."
+        )
+    elif candidate_index == 1:
+        user_prompt_parts.append(
+            "\nFor this call (Candidate 2): Use a different structure like \"The system shall [response] when [condition]\" "
+            "or \"The system shall [response] upon [condition]\"."
+        )
+    elif candidate_index == 2:
+        user_prompt_parts.append(
+            "\nFor this call (Candidate 3): Use yet another different structure like \"Upon [condition], the system shall [response]\" "
+            "or a different word order entirely."
+        )
+    
+    user_prompt_parts.append(
+        "\nRemember: Use a genuinely different sentence structure than the other candidates. "
+        "Preserve the exact technical meaning while varying the formulation."
+    )
     user_prompt = "\n\n".join(user_prompt_parts)
 
     return PromptBundle(

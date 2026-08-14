@@ -286,10 +286,10 @@ export default function ConsistencyPage() {
                   return (
                     <tr key={rel.id} className="hover:bg-[#142036]/50 transition">
                       <td className="py-3 px-3 font-mono font-bold text-[#1EA7FF]">
-                        #{rel.req_1?.sequence_in_run || rel.req_id_1}
+                        #{rel.req_1?.display_id || rel.req_1?.sequence_in_run || rel.req_id_1}
                       </td>
                       <td className="py-3 px-3 font-mono font-bold text-[#1EA7FF]">
-                        #{rel.req_2?.sequence_in_run || rel.req_id_2}
+                        #{rel.req_2?.display_id || rel.req_2?.sequence_in_run || rel.req_id_2}
                       </td>
                       <td className="py-3 px-3">
                         <span
@@ -364,7 +364,7 @@ export default function ConsistencyPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <div className="text-[10px] font-bold text-[#8FA3BF]">
-                        Requirement #{rel.req_1?.sequence_in_run || rel.req_id_1}
+                        Requirement #{rel.req_1?.display_id || rel.req_1?.sequence_in_run || rel.req_id_1}
                       </div>
                       <div className="text-xs text-[#F5F7FA] line-clamp-2">
                         {rel.req_1?.recommended_text || rel.req_1?.original_text}
@@ -372,7 +372,7 @@ export default function ConsistencyPage() {
                     </div>
                     <div className="space-y-1">
                       <div className="text-[10px] font-bold text-[#8FA3BF]">
-                        Requirement #{rel.req_2?.sequence_in_run || rel.req_id_2}
+                        Requirement #{rel.req_2?.display_id || rel.req_2?.sequence_in_run || rel.req_id_2}
                       </div>
                       <div className="text-xs text-[#F5F7FA] line-clamp-2">
                         {rel.req_2?.recommended_text || rel.req_2?.original_text}

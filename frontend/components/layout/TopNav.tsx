@@ -7,12 +7,14 @@ import { Activity, Bell, Server, Database, Sparkles, RefreshCw } from "lucide-re
 export function TopNav() {
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [modelName, setModelName] = useState<string>("");
 
   const checkHealth = async () => {
     setIsRefreshing(true);
     try {
       const res = await apiService.getHealth();
       setApiOnline(res.status === "ok");
+      setModelName(res.model || "");
     } catch {
       setApiOnline(false);
     } finally {
@@ -42,7 +44,7 @@ export function TopNav() {
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] text-xs">
           <Sparkles className="w-3.5 h-3.5 text-[#FFB300]" />
           <span className="text-[#8FA3BF]">Model:</span>
-          <span className="font-mono font-semibold text-[#F5F7FA]">gemma3:4b / llama3.1</span>
+          <span className="font-mono font-semibold text-[#F5F7FA]">{modelName || "Loading..."}</span>
         </div>
 
         {/* SQLite Database Status */}
