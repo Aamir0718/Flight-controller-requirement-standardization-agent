@@ -223,6 +223,64 @@ class ConsistencyAnalyzer:
             summary=summary,
         )
 
+    def compute_pairwise_similarities(self, requirements: list[dict[str, Any]]) -> dict[str, Any]:
+        """Computes the raw cosine similarity for every pair of requirements
+        (all n*(n-1)/2 combinations, not just the ones that clear
+        duplicate_threshold/similarity_threshold) -- for the Embedding
+        Distance tab, which needs every pair's angle, not a filtered
+        relationship classification.
+
+        Deliberately does not call _classify_pair()/the LLM contradiction
+        check: this is a pure embedding (or TF-IDF fallback) + cosine
+        similarity computation, so it stays fast and safe to recompute on
+        every tab open even for a 100-requirement run (~5000 pairs).
+        """
+        if len(requirements) < 2:
+            return {
+                "pairs": [],
+                "method": "sentence-transformers" if self.use_sentence_transformers else "tfidf",
+                "total_requirements": len(requirements),
+            }
+
+        req_texts = [req["recommended_text"] for req in requirements]
+        req_ids = [req["id"] for req in requirements]
+
+        if self.use_sentence_transformers:
+            embeddings = self.embedding_model.encode(
+                req_texts, show_progress_bar=False, convert_to_numpy=True
+            )
+        else:
+            embeddings = self.embedding_model.fit_transform(req_texts).toarray()
+
+        similarity_matrix = cosine_similarity(embeddings)
+
+        pairs: list[dict[str, Any]] = []
+        n = len(requirements)
+        for i in range(n):
+            for j in range(i + 1, n):
+                # Cosine similarity IS the cosine of the angle between the
+                # two embedding vectors -- clamp before acos() since
+                # floating-point rounding can push it a hair outside
+                # [-1, 1] and make acos() raise.
+                similarity = float(similarity_matrix[i][j])
+                clamped = max(-1.0, min(1.0, similarity))
+                angle_degrees = float(np.degrees(np.arccos(clamped)))
+                pairs.append(
+                    {
+                        "req_id_1": req_ids[i],
+                        "req_id_2": req_ids[j],
+                        "similarity": similarity,
+                        "distance": 1.0 - similarity,
+                        "angle_degrees": angle_degrees,
+                    }
+                )
+
+        return {
+            "pairs": pairs,
+            "method": "sentence-transformers" if self.use_sentence_transformers else "tfidf",
+            "total_requirements": n,
+        }
+
     def _classify_pair(
         self,
         text1: str,

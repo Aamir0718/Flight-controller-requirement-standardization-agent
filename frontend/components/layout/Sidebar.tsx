@@ -2,18 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { 
-  LayoutDashboard, 
-  UploadCloud, 
-  Cpu, 
-  FileCheck2, 
-  Columns3, 
-  BarChart3, 
-  History, 
-  Download, 
+import {
+  LayoutDashboard,
+  UploadCloud,
+  Cpu,
+  FileCheck2,
+  Columns3,
+  BarChart3,
+  History,
+  Download,
   Settings,
   ShieldCheck,
-  GitBranch
+  GitBranch,
+  Ruler
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ const navItems = [
   { name: "Requirement Review", href: "/review", icon: FileCheck2 },
   { name: "Comparison Matrix", href: "/compare", icon: Columns3 },
   { name: "Consistency Analysis", href: "/consistency", icon: GitBranch },
+  { name: "Embedding Distance", href: "/embedding-distance", icon: Ruler },
   { name: "Analytics & Reports", href: "/analytics", icon: BarChart3 },
   { name: "Run History", href: "/history", icon: History },
   { name: "Export Center", href: "/export", icon: Download },

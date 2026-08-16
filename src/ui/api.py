@@ -13,6 +13,7 @@ Run it (binds to loopback by default, matching the offline requirement):
 """
 
 from __future__ import annotations
+import os
 import sqlite3
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
@@ -27,18 +28,30 @@ import storage.db as db
 from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
 from llm.local_llm_client import LocalLLMClient
-from pipeline.graph import build_graph, run_requirement
+from pipeline.graph import build_graph, run_requirement_streaming
 from config import get_settings
+from ui import progress
 
 app = FastAPI(title="Flight Controller Requirements Agent")
+
+# Local dev origins are always allowed. When the frontend is deployed
+# elsewhere (e.g. Vercel), set CORS_ALLOWED_ORIGINS to a comma-separated
+# list of extra origins (e.g. "https://my-app.vercel.app") rather than
+# hardcoding a deployment-specific URL here.
+_default_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+_extra_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=_default_origins + _extra_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -131,13 +144,78 @@ def health() -> dict[str, str]:
     return {"status": "ok", "model": settings["ollama"]["model"]}
 
 
+def _describe_stage(node_name: str, node_output: dict) -> str:
+    """Turns one LangGraph node's raw output into a human-readable console
+    line for the live progress log -- e.g. "3 candidate rewrites generated
+    via Ollama" rather than dumping the raw state dict."""
+    if node_name == "Parse":
+        text = node_output.get("original_text", "")
+        return f"Parsed requirement text ({len(text)} chars)"
+
+    if node_name == "RuleFlag":
+        flags = node_output.get("rule_flags", [])
+        if not flags:
+            return "No rule violations detected"
+        types = ", ".join(f["violation_type"] for f in flags)
+        return f"{len(flags)} rule flag(s) detected: {types}"
+
+    if node_name == "ClassifyPattern":
+        classification = node_output.get("ears_classification", {})
+        pattern = classification.get("pattern", "unknown")
+        confidence = classification.get("confidence", 0.0)
+        return f"EARS pattern classified as '{pattern}' (confidence {confidence:.2f})"
+
+    if node_name == "ComplianceCheck":
+        compliant = node_output.get("ears_compliant", False)
+        return (
+            "EARS compliance check passed -- proceeding to LLM rewrite generation"
+            if compliant
+            else "EARS compliance check FAILED -- rejecting without calling the LLM"
+        )
+
+    if node_name == "RejectNonEars":
+        return (
+            "Requirement REJECTED (not EARS compliant): no candidates generated, "
+            "flagged for human review"
+        )
+
+    if node_name == "GenerateCandidates":
+        candidates = node_output.get("candidates_raw", [])
+        return f"{len(candidates)} candidate rewrite(s) generated via Ollama"
+
+    if node_name == "ScoreAndRecommend":
+        recommendation = node_output.get("recommendation")
+        if recommendation is None:
+            return "Candidates scored via INCOSE rule engine"
+        recommended = recommendation.recommended
+        return (
+            f"Recommended candidate #{recommendation.recommended_index + 1} "
+            f"(INCOSE score {recommended.score:.1f}/100)"
+        )
+
+    if node_name == "Finalize":
+        needs_review = node_output.get("needs_human_review", False)
+        return (
+            "Flagged for human review"
+            if needs_review
+            else "Ready for export -- no human review required"
+        )
+
+    return "Stage completed"
+
+
 def _process_run(run_id: int, file_path: Path) -> None:
     """Runs the full pipeline against every requirement in ``file_path``
     and saves each result as it completes. Always leaves the run in
     'completed' or 'failed' status -- never raises out of a background
     task, since FastAPI would just log and silently drop the exception.
+
+    Also streams live stage-by-stage progress (see src/ui/progress.py) so
+    the frontend's Processing Status page can show, in real time, exactly
+    which of the 6 pipeline stages is running for which requirement.
     """
     conn = db.connect()
+    progress.start_run(run_id)
     try:
         db.update_run_status(conn, run_id, "processing")
 
@@ -150,25 +228,43 @@ def _process_run(run_id: int, file_path: Path) -> None:
                 error_message=_error_code_for_parse_issues(parse_result.issues),
             )
             return
-        db.set_run_total_requirements(conn, run_id, len(parse_result.candidates))
+        total = len(parse_result.candidates)
+        db.set_run_total_requirements(conn, run_id, total)
 
         client = LocalLLMClient()
         client.check_reachable()
         compiled_graph = build_graph(client=client)
 
         for i, candidate in enumerate(parse_result.candidates):
-            result = run_requirement(
-                compiled_graph, candidate.text, source_location=asdict(candidate.location)
+            progress.record(
+                run_id, i, "Start", f"Processing requirement {i + 1} of {total}", status="running"
+            )
+
+            def _on_stage(node_name: str, node_output: dict, _i: int = i) -> None:
+                progress.record(run_id, _i, node_name, _describe_stage(node_name, node_output))
+
+            result = run_requirement_streaming(
+                compiled_graph,
+                candidate.text,
+                source_location=asdict(candidate.location),
+                on_stage=_on_stage,
             )
             db.save_requirement(conn, run_id, i, result)
 
         # Run consistency analysis after all requirements are processed
+        progress.record(
+            run_id, total - 1, "ConsistencyAnalysis",
+            "Running cross-requirement consistency analysis...", status="running",
+        )
         _run_consistency_analysis(conn, run_id)
+        progress.record(
+            run_id, total - 1, "ConsistencyAnalysis", "Consistency analysis complete"
+        )
 
         db.update_run_status(conn, run_id, "completed")
     except Exception as exc:  # noqa: BLE001 -- always record, a background task must not fail silently
         friendly_code = _error_code_for_exception(exc)
-        
+
         # Log full technical error for debugging
         import traceback
         import sys
@@ -179,7 +275,7 @@ def _process_run(run_id: int, file_path: Path) -> None:
             # Fallback for Windows console encoding issues
             print(f"Error processing run {run_id}: {repr(exc)}")
             traceback.print_exc(file=sys.stderr)
-        
+
         # Store user-friendly error code in database
         error_message = friendly_code if friendly_code else AI_UNKNOWN_ERROR
         db.update_run_status(conn, run_id, "failed", error_message=error_message)
@@ -427,3 +523,49 @@ def reanalyze_consistency(run_id: int) -> dict:
         }
     finally:
         conn.close()
+
+
+@app.get("/runs/{run_id}/progress")
+def get_run_progress(run_id: int, after_seq: int = -1) -> dict:
+    """Live pipeline progress for the Processing Status page: which stage
+    is currently running for which requirement, plus every stage-completion
+    event with seq > after_seq (pass the highest seq you've already seen to
+    poll incrementally instead of re-fetching the whole log each time).
+    """
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+    finally:
+        conn.close()
+    return progress.get_progress(run_id, after_seq)
+
+
+@app.get("/runs/{run_id}/embedding-matrix")
+def get_embedding_matrix(run_id: int) -> dict:
+    """Full pairwise embedding-similarity matrix for every combination of
+    requirements in a run (not just the ones that clear the duplicate/
+    similar thresholds -- see /runs/{run_id}/consistency for that). Pure
+    embedding + cosine similarity, no LLM calls, so it's cheap to call on
+    every tab open even for a 100-requirement run (~5000 pairs).
+    """
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        requirements = db.get_requirements_for_run(conn, run_id)
+    finally:
+        conn.close()
+
+    req_data = [{"id": req["id"], "recommended_text": req["recommended_text"]} for req in requirements]
+    analyzer = ConsistencyAnalyzer()
+    result = analyzer.compute_pairwise_similarities(req_data)
+
+    seq_by_id = {req["id"]: req["sequence_in_run"] + 1 for req in requirements}
+    for pair in result["pairs"]:
+        pair["req_1_number"] = seq_by_id.get(pair["req_id_1"])
+        pair["req_2_number"] = seq_by_id.get(pair["req_id_2"])
+
+    return result

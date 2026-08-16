@@ -1,6 +1,7 @@
 """Wires the end-to-end requirement-rewriting pipeline as a LangGraph:
 
-    Parse -> RuleFlag -> ClassifyPattern -> GenerateCandidates -> ScoreAndRecommend -> Finalize
+    Parse -> RuleFlag -> ClassifyPattern -> ComplianceCheck -+-> GenerateCandidates -> ScoreAndRecommend -> Finalize
+                                                              +-> RejectNonEars
 
 - Parse: src/ingestion/parser.py -- either extracts a candidate requirement
   from an .xlsx file (given file_path + cell_reference), or normalizes an
@@ -10,9 +11,13 @@
 - RuleFlag: src/rules/detectors.py's run_all_detectors -- deterministic,
   no LLM.
 - ClassifyPattern: src/rules/ears_classifier.py's classify_ears_pattern --
-  deterministic keyword classifier, no LLM. Runs independently of
-  RuleFlag; its first-guess pattern is passed into the prompt built by
-  GenerateCandidates as context, not as a hard constraint.
+  deterministic keyword classifier, no LLM.
+- ComplianceCheck: deterministic gate, no LLM. If ClassifyPattern couldn't
+  confidently match a recognized EARS template (UNCLEAR_LABEL), the
+  requirement is rejected outright -- routed straight to RejectNonEars,
+  never reaching GenerateCandidates -- instead of spending an Ollama call
+  guessing a rewrite for text that isn't structured as EARS to begin with.
+  Only a requirement that already clears this gate reaches the LLM.
 - GenerateCandidates: src/llm/local_llm_client.py + src/pipeline/
   candidate_generator.py -- the only node that talks to Ollama. The
   RuleFlag flags and ClassifyPattern's guess both feed into the prompt
@@ -24,6 +29,13 @@
   compliance_threshold (config/settings.yaml's pipeline.compliance_threshold)
   -- a low-scoring "best of 3" is not presented as a confident
   recommendation.
+- RejectNonEars: ComplianceCheck's rejection branch. Assembles the same
+  public result shape as Finalize (so every caller/consumer -- src/ui/api.py,
+  src/storage/db.py, the frontend -- handles it identically) but with
+  candidates=[] and recommended_index=-1 as the signal that no LLM rewrite
+  was attempted; recommended_text falls back to the original text, and
+  recommended_score is the original text's own deterministic INCOSE score
+  (still no LLM involved) so a real number is still shown.
 
 Only GenerateCandidates requires a reachable Ollama instance; every other
 node is pure/offline, so build_graph() itself never touches the network --
@@ -44,7 +56,8 @@ from llm.local_llm_client import LocalLLMClient
 from pipeline.candidate_generator import Candidate, generate_candidates
 from pipeline.recommender import RecommendationResult, recommend
 from rules.detectors import run_all_detectors
-from rules.ears_classifier import classify_ears_pattern
+from rules.ears_classifier import UNCLEAR_LABEL, classify_ears_pattern
+from rules.incose_scorer import score_requirement
 
 DEFAULT_COMPLIANCE_THRESHOLD = 80.0
 
@@ -65,13 +78,16 @@ class PipelineState(TypedDict, total=False):
     # --- ClassifyPattern ---
     ears_classification: dict
 
+    # --- ComplianceCheck ---
+    ears_compliant: bool
+
     # --- GenerateCandidates ---
     candidates_raw: list[Candidate]
 
     # --- ScoreAndRecommend ---
     recommendation: RecommendationResult
 
-    # --- Finalize ---
+    # --- Finalize / RejectNonEars ---
     result: dict
     needs_human_review: bool
 
@@ -147,6 +163,50 @@ def classify_pattern_node(state: PipelineState) -> dict:
             "reason": classification.reason,
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Node: ComplianceCheck -- the EARS compliance gate, run before any LLM call
+# ---------------------------------------------------------------------------
+
+
+def compliance_check_node(state: PipelineState) -> dict:
+    pattern = state["ears_classification"]["pattern"]
+    return {"ears_compliant": pattern != UNCLEAR_LABEL}
+
+
+def _route_after_compliance_check(state: PipelineState) -> str:
+    return "generate" if state["ears_compliant"] else "reject"
+
+
+# ---------------------------------------------------------------------------
+# Node: RejectNonEars -- ComplianceCheck's rejection branch (no LLM call)
+# ---------------------------------------------------------------------------
+
+
+def _make_reject_node(compliance_threshold: float):
+    def reject_node(state: PipelineState) -> dict:
+        original_text = state["original_text"]
+        # Still a real, deterministic INCOSE score for the original text --
+        # just never rewritten, since it was rejected before GenerateCandidates.
+        score_result = score_requirement(original_text)
+
+        result = {
+            "original_text": original_text,
+            "source_location": state["source_location"],
+            "rule_flags": state["rule_flags"],
+            "ears_pattern": state["ears_classification"],
+            "candidates": [],
+            "recommended_index": -1,
+            "recommended_text": original_text,
+            "recommended_score": score_result.score,
+            "vague_term_suggestions": [],
+            "compliance_threshold": compliance_threshold,
+            "needs_human_review": True,
+        }
+        return {"result": result, "needs_human_review": True}
+
+    return reject_node
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +305,8 @@ def build_graph(
     graph.add_node("Parse", parse_node)
     graph.add_node("RuleFlag", rule_flag_node)
     graph.add_node("ClassifyPattern", classify_pattern_node)
+    graph.add_node("ComplianceCheck", compliance_check_node)
+    graph.add_node("RejectNonEars", _make_reject_node(compliance_threshold))
     graph.add_node("GenerateCandidates", _make_generate_candidates_node(client))
     graph.add_node("ScoreAndRecommend", score_and_recommend_node)
     graph.add_node("Finalize", _make_finalize_node(compliance_threshold))
@@ -252,10 +314,16 @@ def build_graph(
     graph.add_edge(START, "Parse")
     graph.add_edge("Parse", "RuleFlag")
     graph.add_edge("RuleFlag", "ClassifyPattern")
-    graph.add_edge("ClassifyPattern", "GenerateCandidates")
+    graph.add_edge("ClassifyPattern", "ComplianceCheck")
+    graph.add_conditional_edges(
+        "ComplianceCheck",
+        _route_after_compliance_check,
+        {"generate": "GenerateCandidates", "reject": "RejectNonEars"},
+    )
     graph.add_edge("GenerateCandidates", "ScoreAndRecommend")
     graph.add_edge("ScoreAndRecommend", "Finalize")
     graph.add_edge("Finalize", END)
+    graph.add_edge("RejectNonEars", END)
 
     return graph.compile()
 
@@ -277,6 +345,35 @@ def run_requirement(
         initial_state["source_location"] = source_location
     final_state = compiled_graph.invoke(initial_state)
     return final_state["result"]
+
+
+def run_requirement_streaming(
+    compiled_graph,
+    requirement_text: str,
+    source_location: dict | None = None,
+    on_stage=None,
+) -> dict:
+    """Same contract and return value as run_requirement(), but drives the
+    graph via .stream(..., stream_mode="updates") instead of .invoke() so
+    ``on_stage(node_name, node_output)`` -- if given -- fires after each
+    node completes (Parse, RuleFlag, ClassifyPattern, ComplianceCheck, then
+    either GenerateCandidates -> ScoreAndRecommend -> Finalize or just
+    RejectNonEars, whichever branch ComplianceCheck routes to), not just
+    once at the end. Used by src/ui/api.py to report live per-requirement
+    progress; existing callers that just want the final result keep using
+    run_requirement().
+    """
+    initial_state: PipelineState = {"requirement_text": requirement_text}
+    if source_location is not None:
+        initial_state["source_location"] = source_location
+
+    accumulated: dict = dict(initial_state)
+    for step in compiled_graph.stream(initial_state, stream_mode="updates"):
+        for node_name, node_output in step.items():
+            accumulated.update(node_output)
+            if on_stage is not None:
+                on_stage(node_name, node_output)
+    return accumulated["result"]
 
 
 def run_workbook(compiled_graph, file_path: str | Path) -> list[dict]:

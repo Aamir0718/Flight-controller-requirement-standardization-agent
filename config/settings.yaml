@@ -6,7 +6,11 @@ ollama:
   host: "localhost"
   port: 11434
   model: gemma3:4b          # config value only, never hardcoded elsewhere
-  request_timeout_seconds: 120
+  # Raised from 120s: this machine has no GPU, so Ollama runs gemma3:4b on
+  # CPU only (~2-3s/token) -- a real requirement's full system+few-shot
+  # prompt takes far longer to evaluate than 120s allows, which was
+  # producing ReadTimeout failures rather than genuine errors.
+  request_timeout_seconds: 900
   temperature: 0.2
 
 storage:

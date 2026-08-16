@@ -12,9 +12,12 @@ Confirms two things for every case, never assumed, always checked:
 1. Nothing crashes. A pipeline exception is caught and recorded as a
    failure on that case, not allowed to abort the whole run.
 2. Every input produces either a valid recommendation (real, non-empty
-   rewritten text, well-formed output) or a clear needs_human_review
-   flag -- never a silent failure (empty/garbage output presented with
-   false confidence).
+   rewritten text, well-formed output), a clean EARS-compliance-gate
+   rejection (0 candidates, recommended_index -1, needs_human_review
+   True -- see src/pipeline/graph.py's RejectNonEars, for text with no
+   recognizable EARS pattern, e.g. several of the malformed cases below),
+   or a clear needs_human_review flag -- never a silent failure
+   (empty/garbage output presented with false confidence).
 
 Requires a reachable local Ollama instance -- fails fast with a clear
 message and writes no output file if it isn't, same as
@@ -122,10 +125,23 @@ def _is_well_formed(result: dict) -> list[str]:
         problems.append(f"missing keys: {sorted(missing)}")
         return problems  # further checks would just raise KeyError
 
-    if len(result["candidates"]) != 3:
-        problems.append(f"expected 3 candidates, got {len(result['candidates'])}")
-    if not (0 <= result["recommended_index"] < len(result["candidates"])):
-        problems.append(f"recommended_index {result['recommended_index']} out of range")
+    # A requirement rejected by the EARS compliance gate before ever
+    # reaching the LLM (src/pipeline/graph.py's ComplianceCheck ->
+    # RejectNonEars, for text with no recognizable EARS pattern -- e.g.
+    # an empty string, whitespace-only, or non-English text with no
+    # "shall" clause) legitimately has zero candidates and
+    # recommended_index == -1. That's the well-defined "rejected" shape,
+    # not garbage output -- it must still carry needs_human_review=True
+    # so it isn't presented with false confidence.
+    rejected = len(result["candidates"]) == 0 and result["recommended_index"] == -1
+    if rejected and not result["needs_human_review"]:
+        problems.append("rejected (0 candidates) but needs_human_review is not True")
+
+    if not rejected:
+        if len(result["candidates"]) != 3:
+            problems.append(f"expected 3 candidates, got {len(result['candidates'])}")
+        if not (0 <= result["recommended_index"] < len(result["candidates"])):
+            problems.append(f"recommended_index {result['recommended_index']} out of range")
     if not isinstance(result["recommended_score"], (int, float)):
         problems.append("recommended_score is not numeric")
     elif not (0.0 <= result["recommended_score"] <= 100.0):
