@@ -109,3 +109,34 @@ export interface ConsistencyResponse {
   summary: ConsistencySummary;
   relationships: RequirementRelationship[];
 }
+
+export interface StageEvent {
+  seq: number;
+  ts: string;
+  requirement_index: number;
+  stage: string;
+  message: string;
+  status: "running" | "done" | "failed";
+}
+
+export interface RunProgress {
+  current_requirement_index: number | null;
+  current_stage: string | null;
+  events: StageEvent[];
+}
+
+export interface EmbeddingPair {
+  req_id_1: number;
+  req_id_2: number;
+  req_1_number: number;
+  req_2_number: number;
+  similarity: number;
+  distance: number;
+  angle_degrees: number;
+}
+
+export interface EmbeddingMatrixResponse {
+  pairs: EmbeddingPair[];
+  method: "sentence-transformers" | "tfidf";
+  total_requirements: number;
+}

@@ -4,13 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { apiService } from "@/services/api";
 import { useState } from "react";
 import { Requirement, Candidate } from "@/types";
-import { 
-  CheckCircle2, 
-  XCircle, 
-  Columns3, 
-  Search, 
-  Filter, 
-  Sparkles, 
+import {
+  Columns3,
+  Search,
+  Filter,
+  Sparkles,
   AlertTriangle,
   Award,
   ChevronDown,
@@ -27,8 +25,6 @@ function ReviewContent() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "review" | "ready">("all");
-  const [acceptedReqs, setAcceptedReqs] = useState<Record<number, boolean>>({});
-  const [rejectedReqs, setRejectedReqs] = useState<Record<number, boolean>>({});
 
   const { data: requirements, isLoading } = useQuery({
     queryKey: ["requirements", activeRunId],
@@ -144,8 +140,10 @@ function ReviewContent() {
         <div className="space-y-6">
           {filteredRequirements.map((req) => {
             const seq = req.sequence_in_run + 1;
-            const isAccepted = acceptedReqs[seq];
-            const isRejected = rejectedReqs[seq];
+            // Rejected by src/pipeline/graph.py's ComplianceCheck gate before
+            // ever reaching the LLM -- signaled by no candidates and no
+            // recommended candidate index (see RejectNonEars in graph.py).
+            const isRejected = req.candidates.length === 0 && req.recommended_index === -1;
 
             return (
               <motion.div
@@ -166,7 +164,11 @@ function ReviewContent() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {req.needs_human_review ? (
+                    {isRejected ? (
+                      <span className="px-2.5 py-1 rounded-full bg-[#FF4D4F]/15 text-[#FF4D4F] border border-[#FF4D4F]/30 text-xs font-semibold">
+                        Rejected — Not EARS Compliant
+                      </span>
+                    ) : req.needs_human_review ? (
                       <span className="px-2.5 py-1 rounded-full bg-[#FFB300]/15 text-[#FFB300] border border-[#FFB300]/30 text-xs font-semibold">
                         Needs Manual Review
                       </span>
@@ -234,7 +236,20 @@ function ReviewContent() {
                   </div>
                 </div>
 
-                {/* 3 AI Candidate Cards */}
+                {/* 3 AI Candidate Cards, or a rejection notice if the
+                    EARS compliance gate never let this one reach the LLM */}
+                {isRejected ? (
+                  <div className="p-4 rounded-xl bg-[#FF4D4F]/5 border border-[#FF4D4F]/30 flex items-start gap-3">
+                    <AlertTriangle className="w-4 h-4 text-[#FF4D4F] flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-[#8FA3BF] leading-relaxed">
+                      This requirement does not follow a recognized EARS pattern, so it was
+                      rejected before any LLM rewrite was attempted. No candidates were
+                      generated — restructure the original text into an EARS template
+                      (Ubiquitous, Event-driven, State-driven, Unwanted Behavior, Optional
+                      Feature, or Complex) and re-run the pipeline.
+                    </p>
+                  </div>
+                ) : (
                 <div className="space-y-2">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[#8FA3BF]">
                     AI Generated Candidate Rewrites
@@ -277,49 +292,20 @@ function ReviewContent() {
                     })}
                   </div>
                 </div>
+                )}
 
-                {/* Action Buttons Footer */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#243244]">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setAcceptedReqs((prev) => ({ ...prev, [seq]: true }));
-                        setRejectedReqs((prev) => ({ ...prev, [seq]: false }));
-                      }}
-                      className={`px-4 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition ${
-                        isAccepted
-                          ? "bg-[#00C853] border-[#00C853] text-white"
-                          : "bg-[#00C853]/15 border-[#00C853]/40 text-[#00C853] hover:bg-[#00C853] hover:text-white"
-                      }`}
+                {/* Footer */}
+                {!isRejected && (
+                  <div className="flex flex-wrap items-center justify-end gap-3 pt-3 border-t border-[#243244]">
+                    <Link
+                      href={`/compare?req_seq=${seq}`}
+                      className="text-xs font-semibold text-[#1EA7FF] hover:underline flex items-center gap-1"
                     >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>{isAccepted ? "Accepted" : "Accept Recommendation"}</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setRejectedReqs((prev) => ({ ...prev, [seq]: true }));
-                        setAcceptedReqs((prev) => ({ ...prev, [seq]: false }));
-                      }}
-                      className={`px-4 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition ${
-                        isRejected
-                          ? "bg-[#FF4D4F] border-[#FF4D4F] text-white"
-                          : "bg-[#FF4D4F]/15 border-[#FF4D4F]/40 text-[#FF4D4F] hover:bg-[#FF4D4F] hover:text-white"
-                      }`}
-                    >
-                      <XCircle className="w-4 h-4" />
-                      <span>{isRejected ? "Rejected" : "Reject / Flag for Edit"}</span>
-                    </button>
+                      <span>View Word Diff Comparison Matrix</span>
+                      <span>→</span>
+                    </Link>
                   </div>
-
-                  <Link
-                    href={`/compare?req_seq=${seq}`}
-                    className="text-xs font-semibold text-[#1EA7FF] hover:underline flex items-center gap-1"
-                  >
-                    <span>View Word Diff Comparison Matrix</span>
-                    <span>→</span>
-                  </Link>
-                </div>
+                )}
               </motion.div>
             );
           })}

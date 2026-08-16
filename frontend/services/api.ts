@@ -1,5 +1,13 @@
 import axios from "axios";
-import { HealthResponse, Requirement, Run, UploadResponse, ConsistencyResponse } from "@/types";
+import {
+  HealthResponse,
+  Requirement,
+  Run,
+  UploadResponse,
+  ConsistencyResponse,
+  RunProgress,
+  EmbeddingMatrixResponse,
+} from "@/types";
 
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -82,6 +90,18 @@ export const apiService = {
 
   async reanalyzeConsistency(runId: number): Promise<{ message: string; summary: Record<string, number>; relationships_count: number }> {
     const { data } = await apiClient.post(`/runs/${runId}/reanalyze-consistency`);
+    return data;
+  },
+
+  async getRunProgress(runId: number, afterSeq: number = -1): Promise<RunProgress> {
+    const { data } = await apiClient.get<RunProgress>(`/runs/${runId}/progress`, {
+      params: { after_seq: afterSeq },
+    });
+    return data;
+  },
+
+  async getEmbeddingMatrix(runId: number): Promise<EmbeddingMatrixResponse> {
+    const { data } = await apiClient.get<EmbeddingMatrixResponse>(`/runs/${runId}/embedding-matrix`);
     return data;
   },
 
