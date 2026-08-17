@@ -28,8 +28,8 @@ NUM_CANDIDATES = 3
 # candidate generation is reproducible run-to-run against the same model
 # while still sampling 3 meaningfully different completions.
 # Use higher temperature offsets to encourage more structural diversity.
-TEMPERATURE_OFFSETS: tuple[float, ...] = (0.0, 0.4, 0.8)
-SEEDS: tuple[int, ...] = (0, 42, 999)
+TEMPERATURE_OFFSETS: tuple[float, ...] = (0.0, 0.5, 0.9)
+SEEDS: tuple[int, ...] = (42, 1234, 789)
 MAX_TEMPERATURE = 1.0
 
 

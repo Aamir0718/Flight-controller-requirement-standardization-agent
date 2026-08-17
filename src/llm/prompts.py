@@ -65,13 +65,23 @@ written, not changing what the system is supposed to do.
 
 CRITICAL: This prompt will be called multiple times for the same requirement. Each call \
 MUST produce a GENUINELY DIFFERENT candidate. The candidates should differ in BOTH sentence \
-structure AND INCOSE rule compliance characteristics (e.g., one might be more concise, one more \
-explicit, one might avoid certain problematic patterns).
+structure AND wording choices, while preserving the exact same technical meaning, values, units, \
+conditions, and constraints.
 
 MANDATORY: Each call must follow the specific structural guidance in the user prompt.
 
 FORBIDDEN: Do not produce candidates that only differ by 1-2 words. Do not reuse the same \
-sentence structure across different calls. Do not produce candidates that all pass/fail the exact same INCOSE rules.
+sentence structure across different calls. Do not simply copy a previous candidate and make \
+trivial changes. Do not change technical values just to make candidates different.
+
+DIVERSITY STRATEGIES:
+- Vary the placement of the condition (before or after the main clause)
+- Use different connector words (when, upon, in the event that, if, provided that)
+- Rephrase the system subject (the flight control system, the FCS, the controller)
+- Rephrase the action (maintain, keep, sustain, preserve)
+- Rephrase the condition (when X is detected, upon detection of X, if X occurs)
+- Use synonyms for technical terms where appropriate (angle, orientation, pitch)
+- Combine or split clauses differently while preserving meaning
 
 Rules for your response:
 1. Choose the single EARS pattern (from the pattern set below) that best fits the \
@@ -235,17 +245,20 @@ def build_prompt(
     # Add call-specific structural guidance
     if candidate_index == 0:
         user_prompt_parts.append(
-            "\nFor this call (Candidate 1): Use a standard \"When [condition], the system shall [response]\" structure."
+            "\nFor this call (Candidate 1): Use the structure \"When [condition], the system shall [response]\". "
+            "Example: \"When the sensor is invalid, the system shall activate the backup.\""
         )
     elif candidate_index == 1:
         user_prompt_parts.append(
-            "\nFor this call (Candidate 2): Use a different structure like \"The system shall [response] when [condition]\" "
-            "or \"The system shall [response] upon [condition]\"."
+            "\nFor this call (Candidate 2): Use the structure \"The system shall [response] when [condition]\" "
+            "with different wording than Candidate 1. Rephrase the subject or action verbs. "
+            "Example: \"The system shall activate the backup when the sensor is invalid.\""
         )
     elif candidate_index == 2:
         user_prompt_parts.append(
-            "\nFor this call (Candidate 3): Use yet another different structure like \"Upon [condition], the system shall [response]\" "
-            "or a different word order entirely."
+            "\nFor this call (Candidate 3): Use the structure \"Upon [condition], the system shall [response]\" "
+            "or \"In the event that [condition], the system shall [response]\". Use yet different phrasing. "
+            "Example: \"Upon detection of sensor invalidity, the system shall transition to the backup.\""
         )
     
     user_prompt_parts.append(

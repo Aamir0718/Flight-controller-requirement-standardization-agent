@@ -682,8 +682,5 @@ def score_requirement(text: str, rulebook_path: Path | None = None) -> ScoreResu
             passed.append(rule["id"])
 
     total = len(rules)
-    # Use 2 decimal places for more precision - with 28 rules, single decimal
-    # only gives values like 96.4, 100.0, 92.9, making it hard to distinguish
-    # candidates that differ by only 1-2 rules
-    score = round(100.0 * len(passed) / total, 2) if total else 0.0
+    score = round(100.0 * len(passed) / total, 1) if total else 0.0
     return ScoreResult(passed=passed, failed=failed, score=score, total_rules=total)
