@@ -2,23 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { apiService } from "@/services/api";
-import { Activity, Bell, Server, Database, Sparkles, RefreshCw } from "lucide-react";
+import { Server, Database, Sparkles } from "lucide-react";
 
 export function TopNav() {
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [modelName, setModelName] = useState<string>("");
 
   const checkHealth = async () => {
-    setIsRefreshing(true);
     try {
       const res = await apiService.getHealth();
       setApiOnline(res.status === "ok");
       setModelName(res.model || "");
     } catch {
       setApiOnline(false);
-    } finally {
-      setIsRefreshing(false);
     }
   };
 
@@ -71,22 +67,6 @@ export function TopNav() {
               Offline
             </span>
           )}
-        </div>
-
-        {/* Refresh Health Button */}
-        <button
-          onClick={checkHealth}
-          disabled={isRefreshing}
-          className="p-2 rounded-lg bg-[#0F172A] border border-[#243244] text-[#8FA3BF] hover:text-[#F5F7FA] hover:border-[#1EA7FF]/40 transition"
-          title="Refresh Health Status"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
-        </button>
-
-        {/* Notifications Icon */}
-        <div className="relative p-2 rounded-lg bg-[#0F172A] border border-[#243244] text-[#8FA3BF]">
-          <Bell className="w-4 h-4" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-[#1EA7FF] rounded-full"></span>
         </div>
       </div>
     </header>
