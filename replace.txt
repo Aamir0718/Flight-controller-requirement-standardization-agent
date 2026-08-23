@@ -1,0 +1,16 @@
+Flight-controller-requirement-standardization-agent/
+│
+├── .venv/                 ← KEEP OLD
+├── offline_packages/      ← KEEP OLD
+├── data/                  ← KEEP OLD
+│
+├── config/                ← REPLACE WITH NEW
+├── src/                   ← REPLACE WITH NEW
+├── frontend/              ← REPLACE WITH NEW
+├── scripts/               ← REPLACE WITH NEW
+├── tests/                 ← REPLACE WITH NEW
+├── deploy/                ← COPY/REPLACE IF PRESENT
+│
+├── requirements.txt       ← REPLACE
+├── pyproject.toml         ← REPLACE
+└── package-lock.json      ← REPLACE
