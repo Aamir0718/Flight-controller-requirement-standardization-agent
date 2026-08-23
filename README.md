@@ -1,257 +1,222 @@
-# Flight Controller Requirements Platform
+# Flight Controller Requirement Standardization Agent
 
-## Easy Setup Guide
-
-Hi!
-
-Follow these steps one by one. You need **3 terminals**.
+## How to Run the Project in VS Code (Offline PC)
 
 ---
 
-## STEP 1 — Clone the project (only the first time)
+## STEP 1: Open the Project
 
-```powershell
-git clone <your-repo-url>
-cd Flight-controller-requirement-standardization-agent
+Open the project folder in VS Code.
+
+Example:
+
+```text
+E:\Projects\fli original
 ```
 
 ---
 
-## TERMINAL 1 — Backend (Python)
+## STEP 2: Open Terminal
 
-1. Open a terminal in the project folder.
+In VS Code:
 
-2. Activate the virtual environment:
+```text
+Terminal → New Terminal
+```
 
-   ```powershell
-   .venv\Scripts\Activate.ps1
-   ```
+Or press:
 
-3. Tell Python where the source code is:
-
-   ```powershell
-   $env:PYTHONPATH = "src"
-   ```
-
-4. Start the backend:
-
-   ```powershell
-   scripts\run_api.ps1
-   ```
-
-   If everything is correct, you should see something like:
-
-   ```
-   Uvicorn running on: http://127.0.0.1:8000
-   ```
-
-5. Open this in your browser:
-
-   ```
-   http://127.0.0.1:8000/health
-   ```
-
-   You should see:
-
-   ```json
-   {"status": "ok"}
-   ```
-
-   If you see this, the backend is working.
+```text
+Ctrl + `
+```
 
 ---
 
-## TERMINAL 2 — Ollama
+## STEP 3: Activate Python Virtual Environment
 
-Check if Ollama is installed and which models you have:
+Run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+```
+
+Then:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+The terminal should show something similar to:
+
+```text
+(.venv) PS E:\Projects\fli original>
+```
+
+---
+
+## STEP 4: Check Ollama
+
+Run:
 
 ```powershell
 ollama list
 ```
 
-If `gemma3:4b` is missing:
+Make sure the required model exists:
 
-```powershell
-ollama pull gemma3:4b
+```text
+gemma3:4b
 ```
 
-If `llama3.1` is missing:
-
-```powershell
-ollama pull llama3.1
-```
-
-Now start Ollama:
-
-```powershell
-ollama serve
-```
-
-If it says it is already running, that is completely fine.
-
-> **Note:** `gemma3:4b` is a small model. On complex or ambiguous requirement text it will occasionally still need a retry (the backend handles this automatically — see "AI Response Validation Failed" below). If you see repeated validation failures on the same file, try switching the configured model to `llama3.1` in `config/settings.yaml` for more reliable structured output.
+If the model is available, proceed.
 
 ---
 
-## TERMINAL 3 — Frontend (Website)
+## STEP 5: Start Backend
 
-Open another terminal.
+In the first terminal, run:
 
-Go inside the frontend folder:
+```powershell
+scripts\run_api.ps1
+```
+
+Keep this terminal running.
+
+The backend should start at:
+
+```text
+http://127.0.0.1:8000
+```
+
+---
+
+## STEP 6: Start Frontend
+
+Open a **second terminal** in VS Code.
+
+Run:
 
 ```powershell
 cd frontend
 ```
 
-Only the first time:
+Then:
 
 ```powershell
-npm install
+npm start
 ```
 
-Every time after that:
+If `npm start` does not work, try:
 
 ```powershell
 npm run dev
 ```
 
-Now open:
+The frontend should be available at:
 
-```
+```text
 http://localhost:3000
 ```
 
-The website should open.
-
 ---
 
-## RUN ORDER
+# Normal Daily Startup
 
-Always start everything in this order:
+## Terminal 1 — Backend
 
-**Terminal 1**
 ```powershell
-.venv\Scripts\Activate.ps1
-$env:PYTHONPATH = "src"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
 scripts\run_api.ps1
 ```
 
-**Terminal 2**
-```powershell
-ollama serve
-```
+Keep this terminal running.
 
-**Terminal 3**
+---
+
+## Terminal 2 — Frontend
+
 ```powershell
 cd frontend
-npm run dev
+npm start
 ```
 
----
+If required:
 
-## HOW TO CHECK EVERYTHING
-
-- Backend: http://127.0.0.1:8000/health
-- Frontend: http://localhost:3000
-
-If both open correctly, everything is running.
-
----
-
-## HOW TO USE THE PROJECT
-
-1. Open the website.
-2. Upload an Excel (`.xlsx`) file.
-3. Click **Start Pipeline Analysis**.
-4. Wait for the processing to finish.
-5. Review the AI-generated requirement suggestions on the **Requirement Review** page.
-6. Check the **Consistency Analysis** page for duplicates, similar pairs, and contradictions across requirements.
-7. Accept or reject each recommendation.
-8. Export the final reviewed Excel file from the **Export Center**.
-
----
-
-## IF SOMETHING DOESN'T WORK
-
-### Backend not running?
-
-Run:
-```powershell
-scripts\run_api.ps1
-```
-Backend health page should open: http://127.0.0.1:8000/health
-
-If you see an `IndentationError` or `SyntaxError` in the traceback right after starting the backend, it means a source file under `src/` has a typo or bad indentation (commonly `src/llm/local_llm_client.py` if it was recently edited). Check the exact file and line number named in the traceback.
-
----
-
-### Frontend not opening?
-
-Go to frontend:
-```powershell
-cd frontend
-```
-Run:
-```powershell
-npm install
-```
-Then:
 ```powershell
 npm run dev
 ```
 
 ---
 
-### Ollama error?
+# If Python Dependencies Are Missing
 
-Run:
+Since this project runs on an offline PC, install packages from the local `offline_packages` folder:
+
 ```powershell
-ollama serve
-```
-
-If the backend reports `AI_SERVICE_UNAVAILABLE`, Ollama isn't reachable — confirm it's running and that the host/port in `config/settings.yaml` match.
-
----
-
-### Model missing?
-
-Run:
-```powershell
-ollama pull gemma3:4b
-```
-or
-```powershell
-ollama pull llama3.1
+pip install --no-index --find-links=offline_packages -r requirements.txt
 ```
 
 ---
 
-### "AI Response Validation Failed" on the Processing Status page
+# If the Frontend Shows an Old or Broken Build
 
-This means Ollama returned a response that didn't match the required JSON schema, even after one automatic retry. It does **not** mean your Excel file is wrong.
+Stop the frontend.
 
-Suggested actions:
-- Click **Retry Processing** on the same file.
-- Restart the local Ollama service (`ollama serve`).
-- Confirm the configured model is pulled and available (`ollama list`).
-- If this happens often with `gemma3:4b`, switch to `llama3.1` in `config/settings.yaml` — smaller models are more prone to malformed structured output.
+Delete the Next.js build folder:
+
+```text
+frontend\.next
+```
+
+Then restart the frontend:
+
+```powershell
+cd frontend
+npm start
+```
+
+Or:
+
+```powershell
+npm run dev
+```
 
 ---
 
-### Consistency Analysis page shows 0 duplicates / 0 similar / 0 contradictions on a file that should have some
+# Important
 
-1. Check the backend terminal for a line like:
-   ```
-   Consistency analysis completed for run N: X relationships found
-   ```
-   If you instead see `Consistency analysis FAILED for run N: ...`, the analysis hit an error and no relationships were saved — read the traceback above that line for the cause.
-2. Click **Re-analyze** on the Consistency Analysis page after fixing any backend issue — this re-runs analysis on the existing run without re-uploading the file.
-3. Very short or very generic requirement text can sometimes score below the similarity threshold even when related — this is expected behavior, not a bug.
+Do **NOT** delete these folders:
+
+```text
+.venv
+frontend\node_modules
+offline_packages
+```
+
+These are required for the offline environment.
 
 ---
 
-## THAT'S IT!
+# Quick Start
 
-Once these three terminals are running, the complete application will work.
+## Terminal 1 — Backend
 
-Happy Coding!
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+scripts\run_api.ps1
+```
+
+## Terminal 2 — Frontend
+
+```powershell
+cd frontend
+npm start
+```
+
+Open the application:
+
+```text
+http://localhost:3000
+```
