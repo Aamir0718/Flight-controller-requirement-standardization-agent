@@ -1,8 +1,5 @@
 Flight-controller-requirement-standardization-agent/
 │
-├── .venv/                 ← KEEP OLD
-├── offline_packages/      ← KEEP OLD
-├── data/                  ← KEEP OLD
 │
 ├── config/                ← REPLACE WITH NEW
 ├── src/                   ← REPLACE WITH NEW

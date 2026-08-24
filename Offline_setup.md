@@ -61,7 +61,8 @@ Activate the virtual environment.
 ```
 
 Install Python dependencies (only the first time).
-
+python -m pip install --no-index --find-links=offline_packages -r requirements.txt   
+dir offline_packages
 ```powershell
 pip install --no-index --find-links=offline_packages -r requirements.txt
 ```
