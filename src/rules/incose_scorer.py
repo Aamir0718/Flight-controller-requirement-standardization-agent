@@ -36,6 +36,9 @@ from typing import Callable
 _RULEBOOK_PATH = (
     Path(__file__).resolve().parent.parent.parent / "data" / "rules" / "incose_rulebook.json"
 )
+_KNOWN_ABBREVIATIONS_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "rules" / "known_abbreviations.json"
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,17 @@ def load_rulebook(path: Path | None = None) -> list[dict]:
     rulebook_path = path or _RULEBOOK_PATH
     data = json.loads(rulebook_path.read_text(encoding="utf-8"))
     return data["rules"]
+
+
+@functools.lru_cache(maxsize=4)
+def load_known_abbreviations(path: Path | None = None) -> frozenset[str]:
+    """Loads data/rules/known_abbreviations.json's allowlist, uppercased,
+    for R37 (Acronyms) to treat as already-defined by domain convention --
+    GPS/INS/IMU/etc. in a flight-controller requirement shouldn't be
+    flagged just for not spelling the acronym out inline every time."""
+    abbrev_path = path or _KNOWN_ABBREVIATIONS_PATH
+    data = json.loads(abbrev_path.read_text(encoding="utf-8"))
+    return frozenset(a.upper() for a in data["abbreviations"])
 
 
 def _automatable_rules(path: Path | None = None) -> list[dict]:
@@ -578,9 +592,12 @@ _ACRONYM = re.compile(r"\b[A-Z]{2,}[A-Z0-9]*\b")
 
 
 def _check_r37(text: str) -> list[str]:
+    known = load_known_abbreviations()
     reasons = []
     for m in _ACRONYM.finditer(text):
         acronym = m.group(0)
+        if acronym.upper() in known:
+            continue  # defined by domain convention -- see known_abbreviations.json
         tail = text[m.end():m.end() + 2]
         if tail.startswith(" ("):
             continue  # assume an inline expansion follows
@@ -684,3 +701,13 @@ def score_requirement(text: str, rulebook_path: Path | None = None) -> ScoreResu
     total = len(rules)
     score = round(100.0 * len(passed) / total, 1) if total else 0.0
     return ScoreResult(passed=passed, failed=failed, score=score, total_rules=total)
+
+
+def check_abbreviations(text: str) -> list[str]:
+    """Runs R37 (Acronyms) + R38 (Abbreviations) against ``text`` and
+    returns every issue found (empty if none). Pure and deterministic,
+    same as score_requirement -- exposed separately so
+    src/pipeline/graph.py's pre-LLM AbbreviationCheck node can gate on
+    just these two rules without running the full rulebook.
+    """
+    return _check_r37(text) + _check_r38(text)

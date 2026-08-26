@@ -7,6 +7,14 @@ near-duplicate reruns of the same greedy-ish completion. Recommending
 between candidates that are all the same defeats the point of generating
 3 in the first place.
 
+The 3 calls are independent (own prompt variant, own temperature/seed) and
+each is a blocking HTTP call to Ollama, so they run concurrently via a
+thread pool rather than one at a time -- a real wall-clock speedup
+whenever Ollama can service more than one request at a time (ollama.Client
+wraps an httpx.Client, which is safe for concurrent use from multiple
+threads). If Ollama itself only processes one request at a time, this
+costs nothing extra either way.
+
 Scoring/picking a winner is NOT this module's job -- see
 src/pipeline/recommender.py, which runs the deterministic INCOSE scorer
 against each candidate. Nothing here calls the scorer or the LLM more than
@@ -15,6 +23,7 @@ once per candidate.
 
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -53,17 +62,19 @@ def generate_candidates(
     temperature/seed each call. Returns one Candidate per call, in order.
 
     Raises whatever LocalLLMClient.generate_structured raises
-    (OllamaUnavailableError, LLMResponseError) on the first call that
-    fails -- a partial candidate set is not a useful result, so this does
-    not swallow errors from individual calls.
+    (OllamaUnavailableError, LLMResponseError) -- a partial candidate set
+    is not a useful result, so this does not swallow errors from
+    individual calls. All ``num_candidates`` calls are already in flight
+    concurrently by the time any one of them can fail, so (unlike the old
+    strictly-sequential version) a failure on an early index no longer
+    guarantees later ones never started -- it still surfaces the first
+    exception (in index order) to the caller either way.
     """
     base_temperature = client.temperature
 
-    candidates: list[Candidate] = []
-    for i in range(num_candidates):
+    def _generate_one(i: int) -> Candidate:
         # Build a fresh prompt for each candidate with call-specific instructions
         bundle = build_prompt(requirement_text, flags, ears_pattern=ears_pattern, candidate_index=i)
-        
         temperature = min(
             base_temperature + TEMPERATURE_OFFSETS[i % len(TEMPERATURE_OFFSETS)],
             MAX_TEMPERATURE,
@@ -75,6 +86,15 @@ def generate_candidates(
             temperature=temperature,
             seed=seed,
         )
-        candidates.append(Candidate(index=i, result=result, temperature=temperature, seed=seed))
+        return Candidate(index=i, result=result, temperature=temperature, seed=seed)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_candidates) as executor:
+        # Submitted in index order, all start immediately (max_workers ==
+        # num_candidates, so none queue behind another); .result() is
+        # called in that same index order so the returned list is ordered
+        # exactly like the old sequential version regardless of which
+        # call actually finishes first.
+        futures = [executor.submit(_generate_one, i) for i in range(num_candidates)]
+        candidates = [f.result() for f in futures]
 
     return candidates

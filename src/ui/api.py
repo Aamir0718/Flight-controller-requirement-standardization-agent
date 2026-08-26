@@ -165,19 +165,23 @@ def _describe_stage(node_name: str, node_output: dict) -> str:
         confidence = classification.get("confidence", 0.0)
         return f"EARS pattern classified as '{pattern}' (confidence {confidence:.2f})"
 
+    if node_name == "AbbreviationCheck":
+        issues = node_output.get("abbreviation_issues", [])
+        if not issues:
+            return "No undefined acronyms or informal abbreviations found"
+        return f"{len(issues)} abbreviation issue(s) found: " + " ".join(issues)
+
     if node_name == "ComplianceCheck":
         compliant = node_output.get("ears_compliant", False)
-        return (
-            "EARS compliance check passed -- proceeding to LLM rewrite generation"
-            if compliant
-            else "EARS compliance check FAILED -- rejecting without calling the LLM"
-        )
+        if compliant:
+            return "EARS compliance check passed -- proceeding to LLM rewrite generation"
+        reason = node_output.get("rejection_reason", "")
+        return f"EARS compliance check FAILED -- rejecting without calling the LLM: {reason}"
 
     if node_name == "RejectNonEars":
-        return (
-            "Requirement REJECTED (not EARS compliant): no candidates generated, "
-            "flagged for human review"
-        )
+        result = node_output.get("result", {})
+        reason = result.get("ears_pattern", {}).get("reason", "not EARS compliant")
+        return f"Requirement REJECTED: {reason}"
 
     if node_name == "GenerateCandidates":
         candidates = node_output.get("candidates_raw", [])

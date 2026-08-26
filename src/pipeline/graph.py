@@ -1,7 +1,7 @@
 """Wires the end-to-end requirement-rewriting pipeline as a LangGraph:
 
-    Parse -> RuleFlag -> ClassifyPattern -> ComplianceCheck -+-> GenerateCandidates -> ScoreAndRecommend -> Finalize
-                                                              +-> RejectNonEars
+    Parse -> RuleFlag -> ClassifyPattern -> AbbreviationCheck -> ComplianceCheck -+-> GenerateCandidates -> ScoreAndRecommend -> Finalize
+                                                                                   +-> RejectNonEars
 
 - Parse: src/ingestion/parser.py -- either extracts a candidate requirement
   from an .xlsx file (given file_path + cell_reference), or normalizes an
@@ -11,17 +11,37 @@
 - RuleFlag: src/rules/detectors.py's run_all_detectors -- deterministic,
   no LLM.
 - ClassifyPattern: src/rules/ears_classifier.py's classify_ears_pattern --
-  deterministic keyword classifier, no LLM.
-- ComplianceCheck: deterministic gate, no LLM. If ClassifyPattern couldn't
+  deterministic keyword classifier, no LLM. Also distinguishes "wrong modal
+  verb" (will/must/should/may used instead of "shall") from genuinely
+  unstructured text, so a rejection names the specific fix needed rather
+  than a generic "unclear".
+- AbbreviationCheck: deterministic, no LLM. Runs INCOSE R37 (Acronyms) and
+  R38 (Abbreviations) -- via src/rules/incose_scorer.py's
+  check_abbreviations() -- against the original text. Acronyms in
+  data/rules/known_abbreviations.json (GPS, INS, IMU, ...) are treated as
+  already defined by domain convention. Deliberately ADVISORY, not a
+  pre-LLM gate: findings are folded into rule_flags as quality flags a
+  human reviewer sees (same as RuleFlag's), not a rejection -- a fixed
+  allowlist can never keep up with a real, large requirement corpus, and
+  gating on it was measured to wrongly reject ~14% of
+  data/golden/fewshot.json's 150 real examples (HVAC, PLC, ARINC, SCADA,
+  ABS, GUI, ... none of them in any reasonable allowlist), which is
+  exactly the false-positive problem this feature exists to avoid.
+- ComplianceCheck: deterministic gate, no LLM. Gates on ClassifyPattern's
+  structural verdict only -- confirmed 0 false rejections against both
+  data/golden/eval.json and fewshot.json. If ClassifyPattern couldn't
   confidently match a recognized EARS template (UNCLEAR_LABEL), the
-  requirement is rejected outright -- routed straight to RejectNonEars,
-  never reaching GenerateCandidates -- instead of spending an Ollama call
-  guessing a rewrite for text that isn't structured as EARS to begin with.
-  Only a requirement that already clears this gate reaches the LLM.
+  requirement is rejected outright, routed straight to RejectNonEars and
+  never reaching GenerateCandidates, instead of spending an Ollama call on
+  text that isn't structured as EARS to begin with. Only a requirement
+  that clears this gate reaches the LLM.
 - GenerateCandidates: src/llm/local_llm_client.py + src/pipeline/
   candidate_generator.py -- the only node that talks to Ollama. The
   RuleFlag flags and ClassifyPattern's guess both feed into the prompt
-  (src/llm/prompts.py, via candidate_generator -> build_prompt).
+  (src/llm/prompts.py, via candidate_generator -> build_prompt). Generates
+  all 3 candidates concurrently (threads) rather than one call at a time --
+  each is an independent, blocking HTTP call to Ollama, so this is a real
+  speedup whenever Ollama can service more than one request at a time.
 - ScoreAndRecommend: src/pipeline/recommender.py -- deterministic INCOSE
   scoring of all 3 candidates, no LLM.
 - Finalize: assembles the public result and decides needs_human_review by
@@ -35,7 +55,9 @@
   candidates=[] and recommended_index=-1 as the signal that no LLM rewrite
   was attempted; recommended_text falls back to the original text, and
   recommended_score is the original text's own deterministic INCOSE score
-  (still no LLM involved) so a real number is still shown.
+  (still no LLM involved) so a real number is still shown. The specific
+  rejection reason is carried in the result's existing ears_pattern.reason
+  field.
 
 Only GenerateCandidates requires a reachable Ollama instance; every other
 node is pure/offline, so build_graph() itself never touches the network --
@@ -57,7 +79,7 @@ from pipeline.candidate_generator import Candidate, generate_candidates
 from pipeline.recommender import RecommendationResult, recommend
 from rules.detectors import run_all_detectors
 from rules.ears_classifier import UNCLEAR_LABEL, classify_ears_pattern
-from rules.incose_scorer import score_requirement
+from rules.incose_scorer import check_abbreviations, score_requirement
 
 DEFAULT_COMPLIANCE_THRESHOLD = 80.0
 
@@ -78,8 +100,12 @@ class PipelineState(TypedDict, total=False):
     # --- ClassifyPattern ---
     ears_classification: dict
 
+    # --- AbbreviationCheck ---
+    abbreviation_issues: list[str]
+
     # --- ComplianceCheck ---
     ears_compliant: bool
+    rejection_reason: str
 
     # --- GenerateCandidates ---
     candidates_raw: list[Candidate]
@@ -166,13 +192,53 @@ def classify_pattern_node(state: PipelineState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node: ComplianceCheck -- the EARS compliance gate, run before any LLM call
+# Node: AbbreviationCheck -- INCOSE R37 (Acronyms) + R38 (Abbreviations)
+# against the original text, no LLM. Advisory only, does NOT gate
+# GenerateCandidates (see ComplianceCheck below for why) -- findings are
+# folded into rule_flags as quality flags a human reviewer sees, same as
+# RuleFlag's findings, rather than blocking the requirement outright.
+# ---------------------------------------------------------------------------
+
+
+def abbreviation_check_node(state: PipelineState) -> dict:
+    issues = check_abbreviations(state["original_text"])
+    advisory_flags = [
+        {
+            "violation_type": "undefined_acronym_or_abbreviation",
+            "span": "",
+            "start": 0,
+            "end": 0,
+            "confidence": 0.6,
+            "reason": issue,
+        }
+        for issue in issues
+    ]
+    return {
+        "abbreviation_issues": issues,
+        "rule_flags": state["rule_flags"] + advisory_flags,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Node: ComplianceCheck -- the EARS compliance gate, run before any LLM call.
+# Gates on ClassifyPattern's structural verdict ONLY -- confirmed safe by
+# checking it against both golden datasets (0 false rejections on either).
+#
+# AbbreviationCheck's findings are deliberately NOT part of this gate: a
+# fixed allowlist of "known" acronyms can never keep up with a real, large
+# requirement corpus. Measured against data/golden/fewshot.json (150 real
+# examples), gating on undefined acronyms would wrongly reject ~14% of
+# them (HVAC, PLC, ARINC, SCADA, ABS, GUI, ...) -- exactly the
+# false-positive problem this feature exists to avoid. So it stays
+# advisory (see AbbreviationCheck above) rather than a hard block.
 # ---------------------------------------------------------------------------
 
 
 def compliance_check_node(state: PipelineState) -> dict:
-    pattern = state["ears_classification"]["pattern"]
-    return {"ears_compliant": pattern != UNCLEAR_LABEL}
+    classification = state["ears_classification"]
+    if classification["pattern"] == UNCLEAR_LABEL:
+        return {"ears_compliant": False, "rejection_reason": classification["reason"]}
+    return {"ears_compliant": True, "rejection_reason": ""}
 
 
 def _route_after_compliance_check(state: PipelineState) -> str:
@@ -191,11 +257,23 @@ def _make_reject_node(compliance_threshold: float):
         # just never rewritten, since it was rejected before GenerateCandidates.
         score_result = score_requirement(original_text)
 
+        # Reuse ears_pattern's existing, already-persisted "reason" field to
+        # carry the specific rejection reason (EARS structure OR abbreviation
+        # issue -- whichever ComplianceCheck actually rejected on) rather than
+        # adding a new result/DB column for it. ClassifyPattern's own
+        # ``pattern`` value is kept as-is: a requirement can be structurally
+        # a real EARS pattern (e.g. "State-driven") and still get rejected
+        # here for an undefined acronym, and that distinction is worth
+        # preserving rather than overwriting the pattern to "unclear".
+        ears_pattern = dict(state["ears_classification"])
+        rejection_reason = state.get("rejection_reason") or ears_pattern.get("reason", "")
+        ears_pattern["reason"] = f"Rejected -- not EARS compliant: {rejection_reason}"
+
         result = {
             "original_text": original_text,
             "source_location": state["source_location"],
             "rule_flags": state["rule_flags"],
-            "ears_pattern": state["ears_classification"],
+            "ears_pattern": ears_pattern,
             "candidates": [],
             "recommended_index": -1,
             "recommended_text": original_text,
@@ -305,6 +383,7 @@ def build_graph(
     graph.add_node("Parse", parse_node)
     graph.add_node("RuleFlag", rule_flag_node)
     graph.add_node("ClassifyPattern", classify_pattern_node)
+    graph.add_node("AbbreviationCheck", abbreviation_check_node)
     graph.add_node("ComplianceCheck", compliance_check_node)
     graph.add_node("RejectNonEars", _make_reject_node(compliance_threshold))
     graph.add_node("GenerateCandidates", _make_generate_candidates_node(client))
@@ -314,7 +393,8 @@ def build_graph(
     graph.add_edge(START, "Parse")
     graph.add_edge("Parse", "RuleFlag")
     graph.add_edge("RuleFlag", "ClassifyPattern")
-    graph.add_edge("ClassifyPattern", "ComplianceCheck")
+    graph.add_edge("ClassifyPattern", "AbbreviationCheck")
+    graph.add_edge("AbbreviationCheck", "ComplianceCheck")
     graph.add_conditional_edges(
         "ComplianceCheck",
         _route_after_compliance_check,
@@ -356,12 +436,12 @@ def run_requirement_streaming(
     """Same contract and return value as run_requirement(), but drives the
     graph via .stream(..., stream_mode="updates") instead of .invoke() so
     ``on_stage(node_name, node_output)`` -- if given -- fires after each
-    node completes (Parse, RuleFlag, ClassifyPattern, ComplianceCheck, then
-    either GenerateCandidates -> ScoreAndRecommend -> Finalize or just
-    RejectNonEars, whichever branch ComplianceCheck routes to), not just
-    once at the end. Used by src/ui/api.py to report live per-requirement
-    progress; existing callers that just want the final result keep using
-    run_requirement().
+    node completes (Parse, RuleFlag, ClassifyPattern, AbbreviationCheck,
+    ComplianceCheck, then either GenerateCandidates -> ScoreAndRecommend ->
+    Finalize or just RejectNonEars, whichever branch ComplianceCheck routes
+    to), not just once at the end. Used by src/ui/api.py to report live
+    per-requirement progress; existing callers that just want the final
+    result keep using run_requirement().
     """
     initial_state: PipelineState = {"requirement_text": requirement_text}
     if source_location is not None:

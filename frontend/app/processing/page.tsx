@@ -38,6 +38,7 @@ const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "Parse", label: "Parse Requirement Text" },
   { key: "RuleFlag", label: "Rule Engine Flag Detection" },
   { key: "ClassifyPattern", label: "EARS Pattern Classification" },
+  { key: "AbbreviationCheck", label: "Acronym & Abbreviation Check" },
   { key: "ComplianceCheck", label: "EARS Compliance Gate (pre-LLM)" },
   { key: "GenerateCandidates", label: "LLM Candidate Generation (Ollama)" },
   { key: "ScoreAndRecommend", label: "INCOSE Scoring & Recommendation" },
