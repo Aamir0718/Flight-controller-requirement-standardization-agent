@@ -1,275 +1,280 @@
-# Running the Flight Controller Requirement Standardization Agent (Offline)
-
-This project can be installed and run on a computer with **no internet connection**.
-
-Before transferring the project to the offline PC, make sure the following are available:
-
-- Python 3.11
-- Node.js
-- Ollama
-- Required Ollama model (`gemma3:4b` or the configured model)
-- `offline_packages/` containing all required Python `.whl` files
-- `frontend/node_modules/` copied from the development machine
-- The complete project source code
+# Flight Controller Requirement Standardization Agent
+## Offline PC Setup and Execution Guide
 
 ---
 
-# Project Setup on the Offline PC
+# BEFORE GOING TO THE OFFICE PC
 
-Copy the following to the offline PC:
+Bring these from the internet/home PC:
+
+```text
+Latest Project Source Code
+offline_packages/
+frontend/node_modules/
+frontend/.next/
+```
+
+After extracting, the project should look like:
 
 ```text
 Flight-controller-requirement-standardization-agent/
 │
-├── config/
-├── data/
+├── offline_packages/
 ├── frontend/
-│   ├── app/
-│   ├── components/
-│   ├── context/
-│   ├── hooks/
-│   ├── lib/
-│   ├── services/
-│   ├── types/
-│   ├── node_modules/       ← Required for offline frontend
+│   ├── node_modules/
+│   ├── .next/
 │   ├── package.json
-│   ├── package-lock.json
-│   └── other frontend configuration files
-│
-├── offline_packages/       ← Python .whl files
-├── scripts/
+│   └── package-lock.json
 ├── src/
-├── tests/
-│
+├── scripts/
+├── config/
 ├── requirements.txt
-├── pyproject.toml
-├── README.md
-└── Offline_setup.md
+└── ...
 ```
-
-> Do not copy `.venv/`. A new virtual environment will be created on the offline PC.
 
 ---
 
-# Terminal 1 — Ollama
+# OFFICE PC — SETUP
 
-Open a terminal and start Ollama:
+## 1. Open Project in VS Code
 
-```powershell
-ollama serve
-```
+Open the project folder.
 
-Optionally verify that the required model is available:
+Open terminal:
 
 ```powershell
-ollama list
+Ctrl + `
 ```
-
-Make sure the model configured for the project is available.
-
-For example:
-
-```text
-gemma3:4b
-```
-
-or:
-
-```text
-llama3.1
-```
-
-Leave this terminal running.
 
 ---
 
-# Terminal 2 — Backend
-
-Open a new PowerShell terminal.
-
-Navigate to the project folder:
+## 2. Check Required Software
 
 ```powershell
-cd E:\Projects\Flight-controller-requirement-standardization-agent
+python --version
 ```
-
-## Create the Python Virtual Environment
-
-This is required only the first time:
 
 ```powershell
-python -m venv .venv
+node --version
 ```
 
-## Activate the Virtual Environment
+```powershell
+npm --version
+```
 
-If PowerShell blocks script execution, run:
+```powershell
+ollama --version
+```
+
+---
+
+## 3. Allow PowerShell Script Execution
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 ```
 
-Then activate the environment:
+---
+
+## 4. Create Python Virtual Environment
+
+From the project root:
+
+```powershell
+python -m venv .venv
+```
+
+---
+
+## 5. Activate Virtual Environment
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-You should see:
+---
 
-```text
-(.venv) PS E:\Projects\Flight-controller-requirement-standardization-agent>
-```
-
-## Install Python Dependencies Completely Offline
-
-First, verify that the offline package folder exists:
-
-```powershell
-dir offline_packages
-```
-
-Then install all dependencies:
+## 6. Install Python Dependencies Completely Offline
 
 ```powershell
 python -m pip install --no-index --find-links=offline_packages -r requirements.txt
 ```
 
-### What this command means
-
-```text
---no-index
-```
-
-Prevents `pip` from trying to access the internet.
-
-```text
---find-links=offline_packages
-```
-
-Tells `pip` to install the packages from the local `.whl` files inside:
-
-```text
-offline_packages/
-```
-
-This installation is required only the first time.
-
-## Start the Backend
-
-Run:
+Verify:
 
 ```powershell
-.\scripts\run_api.ps1
+pip check
 ```
-
-The backend should start on:
-
-```text
-http://127.0.0.1:8008
-```
-
-Leave this terminal running.
 
 ---
 
-# Terminal 3 — Frontend
+# FRONTEND SETUP — NO INTERNET REQUIRED
 
-Open another PowerShell terminal.
-
-Navigate to the frontend folder:
-
-```powershell
-cd E:\Projects\Flight-controller-requirement-standardization-agent\frontend
-```
-
-Before running the frontend, ensure this folder already exists:
+Make sure these folders were already copied:
 
 ```text
-frontend/
-└── node_modules/
+frontend/node_modules/
+frontend/.next/
 ```
 
-This folder must be copied from the development machine because the offline PC cannot download npm packages from the internet.
-
-## Start the Frontend
-
-Run:
+Do NOT run:
 
 ```powershell
-npm start
+npm install
 ```
 
-If the project uses the development script instead, run:
+Do NOT run:
+
+```powershell
+npm install next
+```
+
+Next.js already exists inside:
+
+```text
+frontend/node_modules/next/
+```
+
+---
+
+# CHECK NEXT.JS
+
+Go to frontend:
+
+```powershell
+cd frontend
+```
+
+Check that Next.js exists:
+
+```powershell
+Test-Path node_modules\next
+```
+
+Expected result:
+
+```text
+True
+```
+
+Check version:
+
+```powershell
+node -p "require('./node_modules/next/package.json').version"
+```
+
+---
+
+# START OLLAMA
+
+Check the available model:
+
+```powershell
+ollama list
+```
+
+Make sure the model used in your `config.yaml` exists.
+
+Example:
+
+```text
+gemma3:4b
+```
+
+If Ollama is not already running:
+
+```powershell
+ollama serve
+```
+
+---
+
+# START BACKEND
+
+Open a new VS Code terminal.
+
+```powershell
+cd "E:\Projects\Flight-controller-requirement-standardization-agent"
+```
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+```
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+```powershell
+scripts\run_api.ps1
+```
+
+Keep this terminal running.
+
+---
+
+# START FRONTEND
+
+Open another terminal.
+
+```powershell
+cd "E:\Projects\Flight-controller-requirement-standardization-agent\frontend"
+```
+
+For development mode:
 
 ```powershell
 npm run dev
 ```
 
-The frontend should be available at:
-
-```text
-http://localhost:3000
-```
-
----
-
-# Verify the Application
-
-All three services should now be running:
-
-```text
-Terminal 1 → Ollama Server
-
-Terminal 2 → FastAPI Backend
-             http://127.0.0.1:8008
-
-Terminal 3 → Next.js Frontend
-             http://localhost:3000
-```
-
-Open the application in the browser:
-
-```text
-http://localhost:3000
-```
-
-The Flight Controller Requirement Standardization Agent should now run completely offline.
-
----
-
-# First-Time Setup Summary
-
-The following commands are only required once on the offline PC:
+Or, if using the already prepared `.next` production build:
 
 ```powershell
-# Navigate to the project
-cd E:\Projects\Flight-controller-requirement-standardization-agent
+npm start
+```
 
-# Create virtual environment
-python -m venv .venv
+---
 
-# Activate virtual environment
+# OPEN APPLICATION
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+---
+
+# NORMAL DAILY STARTUP
+
+## Terminal 1 — Backend
+
+```powershell
+cd "E:\Projects\Flight-controller-requirement-standardization-agent"
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+
 .\.venv\Scripts\Activate.ps1
 
-# Install Python dependencies from local wheel files
-python -m pip install --no-index --find-links=offline_packages -r requirements.txt
+scripts\run_api.ps1
 ```
 
-After the first-time setup, you only need to:
+---
+
+## Terminal 2 — Frontend
 
 ```powershell
-# Terminal 1
+cd "E:\Projects\Flight-controller-requirement-standardization-agent\frontend"
+
+npm run dev
+```
+
+---
+
+## Terminal 3 — Ollama
+
+Only if Ollama is not already running:
+
+```powershell
 ollama serve
-```
-
-```powershell
-# Terminal 2
-.\scripts\run_api.ps1
-```
-
-```powershell
-# Terminal 3
-cd frontend
-npm start
 ```
