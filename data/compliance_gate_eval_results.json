@@ -1,0 +1,18 @@
+{
+  "total_examples": 235,
+  "positive_examples_should_reject": 25,
+  "negative_examples_should_pass": 210,
+  "confusion_matrix": {
+    "true_positive": 25,
+    "false_positive": 0,
+    "false_negative": 0,
+    "true_negative": 210
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1_score": 1.0,
+  "accuracy": 1.0,
+  "misclassified_count": 0,
+  "misclassified": [],
+  "elapsed_seconds": 0.015
+}

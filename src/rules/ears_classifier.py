@@ -68,6 +68,12 @@ def _keyword_to_pattern_name(path: Path | None = None) -> dict[str, str]:
 
 _SHALL = re.compile(r"\bshall\b", re.IGNORECASE)
 _LEADING_WORD = re.compile(r"[A-Za-z]+")
+# EARS/INCOSE convention reserves "shall" as the sole normative keyword; a
+# requirement author reaching for "will"/"must"/"should"/"may" instead is a
+# specific, common, fixable mistake -- worth naming precisely (so a
+# rejection reads "used 'will' instead of 'shall'", not just "unclear")
+# rather than lumping it in with genuinely unstructured text.
+_WEAK_MODAL = re.compile(r"\b(will|must|should|may)\b", re.IGNORECASE)
 
 
 def _leading_word(segment: str) -> str:
@@ -88,6 +94,18 @@ def classify_ears_pattern(text: str, patterns_path: Path | None = None) -> Class
 
     shall_m = _SHALL.search(stripped)
     if not shall_m:
+        weak_modal_m = _WEAK_MODAL.search(stripped)
+        if weak_modal_m:
+            found = weak_modal_m.group(0)
+            return ClassificationResult(
+                pattern=UNCLEAR_LABEL,
+                confidence=0.0,
+                matched_keywords=(found.lower(),),
+                reason=(
+                    f"Uses '{found}' instead of 'shall' -- EARS/INCOSE requires 'shall' "
+                    "as the sole normative keyword. Replace it with 'shall' and re-check."
+                ),
+            )
         return ClassificationResult(
             pattern=UNCLEAR_LABEL,
             confidence=0.0,

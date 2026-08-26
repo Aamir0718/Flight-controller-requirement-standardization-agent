@@ -215,6 +215,9 @@ function ReviewContent() {
                         } else if (type.includes("compound")) {
                           colorClass = "bg-[#8B5CF6]/15 text-[#8B5CF6] border-[#8B5CF6]/30";
                           prefix = "🟣";
+                        } else if (type.includes("acronym") || type.includes("abbreviation")) {
+                          colorClass = "bg-[#00C4B4]/15 text-[#00C4B4] border-[#00C4B4]/30";
+                          prefix = "🔤";
                         }
 
                         return (

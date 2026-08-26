@@ -1,0 +1,16 @@
+{
+  "_comment": "Acronyms/initialisms treated as already 'defined' by domain convention for INCOSE rule R37 (Acronyms) -- so a real flight-controller/aerospace/defense requirement using GPS, INS, IMU, etc. isn't rejected just for not spelling them out inline every single time. Add project-specific acronyms here as needed; matching is case-insensitive and whole-word.",
+  "abbreviations": [
+    "GPS", "GNSS", "INS", "IMU", "AHRS", "GPU", "CPU", "MCU", "ECU", "FCC",
+    "PWM", "RF", "UART", "SPI", "I2C", "CAN", "USB", "LED", "LCD", "PSI",
+    "RPM", "DC", "AC", "ID", "IP", "URL", "RAM", "ROM", "EEPROM", "ADC",
+    "DAC", "PID", "FOV", "LOS", "HUD", "IFF", "RADAR", "SONAR", "LIDAR",
+    "UAV", "UGV", "USV", "ISR", "C2", "C3I", "GCS", "RTK", "DGPS", "ADS-B",
+    "TCAS", "GPWS", "EGPWS", "FMS", "AFCS", "FBW", "APU", "ECS", "FADEC",
+    "HSI", "ADI", "VOR", "ILS", "GLONASS", "IRQ", "PCB", "FPGA", "ASIC",
+    "SoC", "OS", "RTOS", "API", "SDK", "JSON", "XML", "HTTP", "HTTPS",
+    "TCP", "UDP", "SSD", "HDD", "EMI", "EMC", "ESD", "MTBF", "FMEA",
+    "DRDO", "ISRO", "DGCA", "MIL-STD", "NATO", "IEEE", "ISO", "INCOSE",
+    "EARS"
+  ]
+}
