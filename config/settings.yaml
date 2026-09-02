@@ -31,6 +31,15 @@ pipeline:
   # the best candidate must reach before Finalize will present it as a
   # recommendation instead of setting needs_human_review = true.
   compliance_threshold: 80.0
+  # Minimum INCOSE compliance score (0-100, over the ~25 automatable rules
+  # IncoseCheck actually runs -- everything except R1/R37/R38, see
+  # src/rules/incose_scorer.py's PRE_LLM_GATE_EXCLUDED_RULE_IDS) a
+  # requirement's ORIGINAL text must reach before src/pipeline/graph.py's
+  # IncoseCheck gate lets it proceed to the EARS gate and, eventually, the
+  # LLM. 80.0 measured 0 false rejections against both
+  # data/golden/eval.json (60 rows) and data/golden/fewshot.json (150
+  # rows) -- see scripts/evaluate_compliance_gate.py.
+  incose_gate_threshold: 80.0
 
 consistency:
   # Threshold for marking requirements as duplicates (0.0-1.0)

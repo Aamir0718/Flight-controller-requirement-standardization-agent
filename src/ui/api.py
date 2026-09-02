@@ -171,21 +171,33 @@ def _describe_stage(node_name: str, node_output: dict) -> str:
             return "No undefined acronyms or informal abbreviations found"
         return f"{len(issues)} abbreviation issue(s) found: " + " ".join(issues)
 
+    if node_name == "IncoseCheck":
+        compliant = node_output.get("incose_compliant", False)
+        score = node_output.get("incose_gate_score", 0.0)
+        if compliant:
+            return f"INCOSE compliance check passed (score {score:.1f}/100) -- proceeding to EARS check"
+        reason = node_output.get("rejection_reason", "")
+        return f"INCOSE compliance check FAILED (score {score:.1f}/100) -- rejecting without checking EARS or calling the LLM: {reason}"
+
     if node_name == "ComplianceCheck":
         compliant = node_output.get("ears_compliant", False)
+        elapsed_ms = node_output.get("deterministic_elapsed_ms")
+        timing = f" [all deterministic checks done in {elapsed_ms:.2f} ms]" if elapsed_ms is not None else ""
         if compliant:
-            return "EARS compliance check passed -- proceeding to LLM rewrite generation"
+            return f"EARS compliance check passed{timing} -- starting LLM rewrite generation (this can take seconds to several minutes on CPU)"
         reason = node_output.get("rejection_reason", "")
-        return f"EARS compliance check FAILED -- rejecting without calling the LLM: {reason}"
+        return f"EARS compliance check FAILED{timing} -- rejecting without calling the LLM: {reason}"
 
     if node_name == "RejectNonEars":
         result = node_output.get("result", {})
-        reason = result.get("ears_pattern", {}).get("reason", "not EARS compliant")
+        reason = result.get("ears_pattern", {}).get("reason", "not EARS/INCOSE compliant")
         return f"Requirement REJECTED: {reason}"
 
     if node_name == "GenerateCandidates":
         candidates = node_output.get("candidates_raw", [])
-        return f"{len(candidates)} candidate rewrite(s) generated via Ollama"
+        elapsed_ms = node_output.get("llm_elapsed_ms")
+        timing = f" in {elapsed_ms / 1000:.1f}s" if elapsed_ms is not None else ""
+        return f"{len(candidates)} candidate rewrite(s) generated via Ollama{timing}"
 
     if node_name == "ScoreAndRecommend":
         recommendation = node_output.get("recommendation")
@@ -216,7 +228,9 @@ def _process_run(run_id: int, file_path: Path) -> None:
 
     Also streams live stage-by-stage progress (see src/ui/progress.py) so
     the frontend's Processing Status page can show, in real time, exactly
-    which of the 6 pipeline stages is running for which requirement.
+    which pipeline stage (Parse, RuleFlag, ClassifyPattern, AbbreviationCheck,
+    IncoseCheck, ComplianceCheck, GenerateCandidates, ScoreAndRecommend,
+    Finalize) is running for which requirement.
     """
     conn = db.connect()
     progress.start_run(run_id)

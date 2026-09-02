@@ -57,8 +57,12 @@ class FakeLLMClient:
         )
 
 
-def _graph(client=None, compliance_threshold=80.0):
-    return build_graph(client=client or FakeLLMClient(), compliance_threshold=compliance_threshold)
+def _graph(client=None, compliance_threshold=80.0, incose_gate_threshold=80.0):
+    return build_graph(
+        client=client or FakeLLMClient(),
+        compliance_threshold=compliance_threshold,
+        incose_gate_threshold=incose_gate_threshold,
+    )
 
 
 class TestRunRequirementOutputShape:
@@ -191,6 +195,78 @@ class TestNeedsHumanReview:
 
         assert result["candidates"][result["recommended_index"]]["has_invented_number"] is False
         assert result["needs_human_review"] is False
+
+
+class TestIncoseGate:
+    """The new IncoseCheck node: runs before ComplianceCheck (EARS), gates
+    on the full INCOSE rulebook minus R1/R37/R38 (see
+    incose_scorer.PRE_LLM_GATE_EXCLUDED_RULE_IDS), and rejects without ever
+    reaching ComplianceCheck or the LLM."""
+
+    # Multiple simultaneous INCOSE defects (vague terms, open-ended clause,
+    # 2 "shall"s in one sentence, "and", "all", "optimize" with no target)
+    # so the gate score drops below any reasonable threshold, while still
+    # being a structurally valid EARS sentence -- isolates the INCOSE gate
+    # from the EARS gate, which would otherwise also reject this text.
+    HEAVILY_DEFECTIVE_TEXT = (
+        "The system shall be user friendly and shall optimize performance rapidly, "
+        "handling all cases quickly and efficiently, etc."
+    )
+
+    def test_heavily_defective_text_is_rejected_without_calling_the_llm(self):
+        client = FakeLLMClient([CLEAN_TEXT] * 3)
+        result = run_requirement(_graph(client), self.HEAVILY_DEFECTIVE_TEXT)
+
+        assert result["candidates"] == []
+        assert result["recommended_index"] == -1
+        assert client.calls == []  # LLM never called
+
+    def test_rejection_reason_names_the_specific_failed_rules(self):
+        result = run_requirement(_graph(), self.HEAVILY_DEFECTIVE_TEXT)
+        reason = result["ears_pattern"]["reason"]
+
+        assert "not INCOSE compliant" in reason
+        # Every failed rule's id should be named, not just a bare score.
+        for rule_id in ("R7", "R9", "R18", "R19", "R26", "R32", "R34"):
+            assert rule_id in reason
+
+    def test_clean_ears_text_passes_the_gate_and_reaches_the_llm(self):
+        client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
+        result = run_requirement(_graph(client), VAGUE_TEXT)
+
+        assert len(result["candidates"]) == 3
+        assert len(client.calls) == 3
+
+    def test_lower_threshold_lets_borderline_text_through(self):
+        # Same text, but with the gate threshold dropped low enough that
+        # its ~72/100 score clears it -- confirms the threshold is actually
+        # read from build_graph()'s incose_gate_threshold, not hardcoded.
+        client = FakeLLMClient([CLEAN_TEXT] * 3)
+        result = run_requirement(
+            _graph(client, incose_gate_threshold=50.0), self.HEAVILY_DEFECTIVE_TEXT
+        )
+        assert len(result["candidates"]) == 3
+
+    def test_incose_rejected_text_never_reaches_ears_check(self):
+        # A requirement that is structurally EARS-valid (starts with "The
+        # system shall...") but INCOSE-defective must be rejected by
+        # IncoseCheck, not misreported as an EARS failure.
+        result = run_requirement(_graph(), self.HEAVILY_DEFECTIVE_TEXT)
+        assert result["ears_pattern"]["pattern"] != "Unclear"
+        assert "not EARS compliant" not in result["ears_pattern"]["reason"]
+
+    def test_default_incose_gate_threshold_comes_from_settings_yaml(self):
+        from config import get_settings
+
+        expected = get_settings()["pipeline"]["incose_gate_threshold"]
+        graph = build_graph(client=FakeLLMClient())
+        # A text just below the configured default should be rejected;
+        # confirms build_graph() actually reads incose_gate_threshold when
+        # it isn't passed explicitly, rather than silently using its own
+        # DEFAULT_INCOSE_GATE_THRESHOLD constant regardless of settings.
+        result = run_requirement(graph, self.HEAVILY_DEFECTIVE_TEXT)
+        if expected > 72.0:
+            assert result["candidates"] == []
 
 
 class TestErrorHandling:

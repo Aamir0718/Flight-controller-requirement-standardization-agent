@@ -667,13 +667,36 @@ CHECK_REGISTRY: dict[str, Callable[[str], list[str]]] = {
 }
 
 
-def score_requirement(text: str, rulebook_path: Path | None = None) -> ScoreResult:
-    """Runs every automatable INCOSE rule against ``text``.
+#: Rules src/pipeline/graph.py's pre-LLM IncoseCheck gate excludes when it
+#: calls score_requirement() below, so nothing gets double-checked (or
+#: double-punished) across the pipeline's deterministic gates:
+#:   - R1 (Structured Statements) duplicates the EARS ComplianceCheck gate
+#:     that runs immediately after IncoseCheck -- a structurally-broken
+#:     requirement is rejected there instead, with an EARS-flavored reason.
+#:   - R37 (Acronyms) / R38 (Abbreviations) are already checked by the
+#:     earlier AbbreviationCheck node (see check_abbreviations() below).
+#: Callers scoring an already-generated LLM candidate (src/pipeline/
+#: recommender.py) do NOT pass this in -- that scoring is judging the
+#: rewrite's overall quality, not re-running a gate the original text
+#: already cleared.
+PRE_LLM_GATE_EXCLUDED_RULE_IDS = frozenset({"R1", "R37", "R38"})
+
+
+def score_requirement(
+    text: str,
+    rulebook_path: Path | None = None,
+    exclude_rule_ids: frozenset[str] = frozenset(),
+) -> ScoreResult:
+    """Runs every automatable INCOSE rule against ``text``, skipping any
+    rule id in ``exclude_rule_ids`` (default: none -- every existing caller
+    that omits it keeps scoring the full rulebook, unchanged).
 
     Pure and deterministic: no network/LLM call, no randomness. Safe to run
     on every candidate rewrite to pick the best-scoring one.
     """
     rules = _automatable_rules(rulebook_path)
+    if exclude_rule_ids:
+        rules = [r for r in rules if r["id"] not in exclude_rule_ids]
 
     missing = [r["id"] for r in rules if r["id"] not in CHECK_REGISTRY]
     if missing:

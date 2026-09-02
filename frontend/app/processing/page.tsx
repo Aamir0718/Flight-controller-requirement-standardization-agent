@@ -30,15 +30,22 @@ import { StageEvent } from "@/types";
 
 // The real LangGraph pipeline nodes (src/pipeline/graph.py), in execution
 // order, run once per requirement -- distinct from the higher-level
-// 8-stage rail above, which describes the whole-run flow. ComplianceCheck
-// gates GenerateCandidates: a requirement that isn't EARS-compliant is
-// rejected right there and never reaches the LLM (see RejectNonEars,
-// handled separately below since it replaces the rest of this rail).
+// 8-stage rail above, which describes the whole-run flow. Two gates stand
+// between AbbreviationCheck and the LLM: IncoseCheck runs first (all
+// automatable INCOSE rules except R1/R37/R38), then ComplianceCheck (EARS
+// structure). A requirement must clear BOTH to reach GenerateCandidates --
+// failing either one rejects it right there and it never reaches the LLM
+// (see RejectNonEars, handled separately below since it replaces the rest
+// of this rail). Everything through ComplianceCheck is pure Python and
+// runs in low single-digit milliseconds; GenerateCandidates is the only
+// node that calls Ollama and the only slow one -- see its console message
+// for the actual timing split on a given run.
 const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "Parse", label: "Parse Requirement Text" },
   { key: "RuleFlag", label: "Rule Engine Flag Detection" },
   { key: "ClassifyPattern", label: "EARS Pattern Classification" },
   { key: "AbbreviationCheck", label: "Acronym & Abbreviation Check" },
+  { key: "IncoseCheck", label: "INCOSE Compliance Gate (pre-LLM)" },
   { key: "ComplianceCheck", label: "EARS Compliance Gate (pre-LLM)" },
   { key: "GenerateCandidates", label: "LLM Candidate Generation (Ollama)" },
   { key: "ScoreAndRecommend", label: "INCOSE Scoring & Recommendation" },
