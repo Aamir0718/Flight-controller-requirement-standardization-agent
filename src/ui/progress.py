@@ -1,7 +1,9 @@
 """In-memory live progress tracking for an active pipeline run.
 
 Lets the frontend's Processing Status page show, in real time, which of
-the 6 LangGraph pipeline stages (see src/pipeline/graph.py) is currently
+the LangGraph pipeline stages (Parse, RuleFlag, ClassifyPattern,
+AbbreviationCheck, IncoseCheck, ComplianceCheck, GenerateCandidates,
+ScoreAndRecommend, Finalize -- see src/pipeline/graph.py) is currently
 executing for which requirement, plus a running console log of what each
 stage did -- without adding a task queue, websockets, or a new SQLite
 table for what is inherently transient, run-scoped state (this project's

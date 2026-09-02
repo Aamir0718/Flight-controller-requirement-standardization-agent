@@ -97,6 +97,66 @@ def test_health(api_env):
 
 
 # ---------------------------------------------------------------------------
+# _describe_stage -- the human-readable console line src/ui/progress.py
+# streams to the frontend's Execution console for each pipeline node.
+# ---------------------------------------------------------------------------
+
+
+class TestDescribeStage:
+    def test_incose_check_pass_names_the_score(self):
+        message = api._describe_stage(
+            "IncoseCheck", {"incose_compliant": True, "incose_gate_score": 96.4}
+        )
+        assert "passed" in message
+        assert "96.4" in message
+
+    def test_incose_check_failure_includes_the_full_rejection_reason(self):
+        reason = "INCOSE score 72.0/100 (threshold 80.0) -- R7 (Vague Terms): ..."
+        message = api._describe_stage(
+            "IncoseCheck",
+            {"incose_compliant": False, "incose_gate_score": 72.0, "rejection_reason": reason},
+        )
+        assert "FAILED" in message
+        assert reason in message
+        assert "without" in message  # makes clear the LLM was never called
+
+    def test_compliance_check_pass_reports_deterministic_timing(self):
+        message = api._describe_stage(
+            "ComplianceCheck", {"ears_compliant": True, "deterministic_elapsed_ms": 0.62}
+        )
+        assert "0.62 ms" in message
+        assert "LLM" in message
+
+    def test_compliance_check_failure_includes_reason_and_timing(self):
+        message = api._describe_stage(
+            "ComplianceCheck",
+            {
+                "ears_compliant": False,
+                "deterministic_elapsed_ms": 1.4,
+                "rejection_reason": "Uses 'should' instead of 'shall'",
+            },
+        )
+        assert "FAILED" in message
+        assert "1.40 ms" in message
+        assert "Uses 'should' instead of 'shall'" in message
+
+    def test_generate_candidates_reports_llm_elapsed_seconds(self):
+        message = api._describe_stage(
+            "GenerateCandidates", {"candidates_raw": [1, 2, 3], "llm_elapsed_ms": 42300}
+        )
+        assert "3 candidate" in message
+        assert "42.3s" in message
+
+    def test_reject_non_ears_shows_the_full_reason_from_the_result(self):
+        message = api._describe_stage(
+            "RejectNonEars",
+            {"result": {"ears_pattern": {"reason": "Rejected -- not INCOSE compliant: ..."}}},
+        )
+        assert "REJECTED" in message
+        assert "not INCOSE compliant" in message
+
+
+# ---------------------------------------------------------------------------
 # /upload
 # ---------------------------------------------------------------------------
 

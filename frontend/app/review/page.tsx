@@ -140,9 +140,11 @@ function ReviewContent() {
         <div className="space-y-6">
           {filteredRequirements.map((req) => {
             const seq = req.sequence_in_run + 1;
-            // Rejected by src/pipeline/graph.py's ComplianceCheck gate before
+            // Rejected by src/pipeline/graph.py's IncoseCheck or
+            // ComplianceCheck gate (whichever ran first and failed) before
             // ever reaching the LLM -- signaled by no candidates and no
             // recommended candidate index (see RejectNonEars in graph.py).
+            // The specific gate and reason are in req.ears_pattern.reason.
             const isRejected = req.candidates.length === 0 && req.recommended_index === -1;
 
             return (
