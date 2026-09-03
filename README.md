@@ -2,6 +2,24 @@
 
 This project can be installed and run on a computer with **no internet connection**.
 
+## Documentation
+
+This file is a setup/run guide only. For the design and validation of the
+compliance-gating pipeline itself, see:
+
+- [`docs/incose_coverage.md`](docs/incose_coverage.md) — which of INCOSE's
+  42 rules are actually checked, where, and which 12 are not automated at
+  all (rule-by-rule table).
+- [`docs/safety_and_traceability.md`](docs/safety_and_traceability.md) —
+  how the tool avoids silently corrupting requirement intent given a
+  non-deterministic LLM in the loop (invented-number guard, human-review
+  gating, full audit trail, nothing overwritten in place).
+- `scripts/evaluate_compliance_gate.py` / `scripts/evaluate_incose_gate.py`
+  — precision/recall/F1 evaluation of the two pre-LLM compliance gates
+  against hand-labeled golden data; run either with no arguments to
+  regenerate `data/compliance_gate_eval_results.json` /
+  `data/incose_gate_eval_results.json`.
+
 Before transferring the project to the offline PC, make sure the following are available:
 
 - Python 3.11
