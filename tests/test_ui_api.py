@@ -103,6 +103,28 @@ def test_health(api_env):
 
 
 class TestDescribeStage:
+    # ComplianceCheck (EARS) now runs FIRST, before IncoseCheck -- see
+    # src/pipeline/graph.py's module docstring for why (structural
+    # validity is a precondition for the INCOSE content checks to mean
+    # anything). So ComplianceCheck's message carries no timing/LLM-start
+    # wording (IncoseCheck is now the last deterministic gate, not this
+    # one), and IncoseCheck's message is the one that reports the total
+    # deterministic elapsed time and announces the LLM call.
+
+    def test_compliance_check_pass_has_no_timing_or_llm_wording(self):
+        message = api._describe_stage("ComplianceCheck", {"ears_compliant": True})
+        assert "passed" in message
+        assert "INCOSE" in message  # says what runs next, not "starting LLM"
+        assert "LLM" not in message
+
+    def test_compliance_check_failure_includes_reason(self):
+        message = api._describe_stage(
+            "ComplianceCheck",
+            {"ears_compliant": False, "rejection_reason": "Uses 'should' instead of 'shall'"},
+        )
+        assert "FAILED" in message
+        assert "Uses 'should' instead of 'shall'" in message
+
     def test_incose_check_pass_names_the_score(self):
         message = api._describe_stage(
             "IncoseCheck", {"incose_compliant": True, "incose_gate_score": 96.4}
@@ -120,25 +142,31 @@ class TestDescribeStage:
         assert reason in message
         assert "without" in message  # makes clear the LLM was never called
 
-    def test_compliance_check_pass_reports_deterministic_timing(self):
+    def test_incose_check_pass_reports_deterministic_timing(self):
         message = api._describe_stage(
-            "ComplianceCheck", {"ears_compliant": True, "deterministic_elapsed_ms": 0.62}
+            "IncoseCheck",
+            {
+                "incose_compliant": True,
+                "incose_gate_score": 100.0,
+                "deterministic_elapsed_ms": 0.62,
+            },
         )
         assert "0.62 ms" in message
         assert "LLM" in message
 
-    def test_compliance_check_failure_includes_reason_and_timing(self):
+    def test_incose_check_failure_includes_reason_and_timing(self):
         message = api._describe_stage(
-            "ComplianceCheck",
+            "IncoseCheck",
             {
-                "ears_compliant": False,
+                "incose_compliant": False,
+                "incose_gate_score": 72.0,
                 "deterministic_elapsed_ms": 1.4,
-                "rejection_reason": "Uses 'should' instead of 'shall'",
+                "rejection_reason": "R7 (Vague Terms): ...",
             },
         )
         assert "FAILED" in message
         assert "1.40 ms" in message
-        assert "Uses 'should' instead of 'shall'" in message
+        assert "R7 (Vague Terms): ..." in message
 
     def test_generate_candidates_reports_llm_elapsed_seconds(self):
         message = api._describe_stage(

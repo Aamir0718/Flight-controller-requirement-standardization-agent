@@ -31,22 +31,30 @@ import { StageEvent } from "@/types";
 // The real LangGraph pipeline nodes (src/pipeline/graph.py), in execution
 // order, run once per requirement -- distinct from the higher-level
 // 8-stage rail above, which describes the whole-run flow. Two gates stand
-// between AbbreviationCheck and the LLM: IncoseCheck runs first (all
-// automatable INCOSE rules except R1/R37/R38), then ComplianceCheck (EARS
-// structure). A requirement must clear BOTH to reach GenerateCandidates --
-// failing either one rejects it right there and it never reaches the LLM
-// (see RejectNonEars, handled separately below since it replaces the rest
-// of this rail). Everything through ComplianceCheck is pure Python and
-// runs in low single-digit milliseconds; GenerateCandidates is the only
-// node that calls Ollama and the only slow one -- see its console message
-// for the actual timing split on a given run.
+// between AbbreviationCheck and the LLM: ComplianceCheck (EARS structure)
+// runs first, then IncoseCheck (all automatable INCOSE rules except
+// R1/R37/R38). EARS runs first deliberately -- structural validity is a
+// precondition for the INCOSE content checks to mean anything; every
+// hand-crafted garbage/malformed example in
+// data/golden/compliance_gate_negatives.json scores 92-100/100 on the
+// INCOSE gate, since a rule like "no more than one 'shall' per sentence"
+// finds nothing to flag in text that isn't a shall-statement at all -- so
+// checking EARS first means garbage gets rejected for the honest reason
+// instead of a misleadingly high INCOSE score. A requirement must clear
+// BOTH gates to reach GenerateCandidates -- failing either one rejects it
+// right there and it never reaches the LLM (see RejectNonEars, handled
+// separately below since it replaces the rest of this rail). Everything
+// through IncoseCheck is pure Python and runs in low single-digit
+// milliseconds; GenerateCandidates is the only node that calls Ollama and
+// the only slow one -- see its console message for the actual timing
+// split on a given run.
 const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "Parse", label: "Parse Requirement Text" },
   { key: "RuleFlag", label: "Rule Engine Flag Detection" },
   { key: "ClassifyPattern", label: "EARS Pattern Classification" },
   { key: "AbbreviationCheck", label: "Acronym & Abbreviation Check" },
-  { key: "IncoseCheck", label: "INCOSE Compliance Gate (pre-LLM)" },
   { key: "ComplianceCheck", label: "EARS Compliance Gate (pre-LLM)" },
+  { key: "IncoseCheck", label: "INCOSE Compliance Gate (pre-LLM)" },
   { key: "GenerateCandidates", label: "LLM Candidate Generation (Ollama)" },
   { key: "ScoreAndRecommend", label: "INCOSE Scoring & Recommendation" },
   { key: "Finalize", label: "Finalize & Review Gate" },
@@ -267,9 +275,17 @@ function ProcessingContent() {
                   const rejectedEvent = currentRequirementEvents.find(
                     (e) => e.stage === "RejectNonEars"
                   );
-                  const rejectedAtIdx = PIPELINE_STAGES.findIndex(
-                    (s) => s.key === "ComplianceCheck"
-                  );
+                  // Whichever gate actually rejected (ComplianceCheck or
+                  // IncoseCheck -- LangGraph runs stages strictly in order
+                  // and stops at whichever one failed), so this is just the
+                  // highest-index pipeline stage that has an event yet.
+                  const rejectedAtIdx = rejectedEvent
+                    ? Math.max(
+                        ...PIPELINE_STAGES.map((s, i) =>
+                          currentRequirementEvents.some((e) => e.stage === s.key) ? i : -1
+                        )
+                      )
+                    : -1;
 
                   return PIPELINE_STAGES.map((stage, idx) => {
                     const stageEvent = currentRequirementEvents.find((e) => e.stage === stage.key);
@@ -357,7 +373,8 @@ function ProcessingContent() {
                   {events.map((e) => {
                     const isRejection =
                       e.stage === "RejectNonEars" ||
-                      (e.stage === "ComplianceCheck" && e.message.includes("FAILED"));
+                      ((e.stage === "ComplianceCheck" || e.stage === "IncoseCheck") &&
+                        e.message.includes("FAILED"));
                     return (
                       <div key={e.seq} className="flex gap-2 py-0.5">
                         <span className="text-[#8FA3BF] flex-shrink-0">{formatClockTime(e.ts)}</span>

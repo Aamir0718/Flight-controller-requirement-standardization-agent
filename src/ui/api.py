@@ -171,22 +171,22 @@ def _describe_stage(node_name: str, node_output: dict) -> str:
             return "No undefined acronyms or informal abbreviations found"
         return f"{len(issues)} abbreviation issue(s) found: " + " ".join(issues)
 
+    if node_name == "ComplianceCheck":
+        compliant = node_output.get("ears_compliant", False)
+        if compliant:
+            return "EARS compliance check passed -- proceeding to INCOSE check"
+        reason = node_output.get("rejection_reason", "")
+        return f"EARS compliance check FAILED -- rejecting without checking INCOSE or calling the LLM: {reason}"
+
     if node_name == "IncoseCheck":
         compliant = node_output.get("incose_compliant", False)
         score = node_output.get("incose_gate_score", 0.0)
-        if compliant:
-            return f"INCOSE compliance check passed (score {score:.1f}/100) -- proceeding to EARS check"
-        reason = node_output.get("rejection_reason", "")
-        return f"INCOSE compliance check FAILED (score {score:.1f}/100) -- rejecting without checking EARS or calling the LLM: {reason}"
-
-    if node_name == "ComplianceCheck":
-        compliant = node_output.get("ears_compliant", False)
         elapsed_ms = node_output.get("deterministic_elapsed_ms")
         timing = f" [all deterministic checks done in {elapsed_ms:.2f} ms]" if elapsed_ms is not None else ""
         if compliant:
-            return f"EARS compliance check passed{timing} -- starting LLM rewrite generation (this can take seconds to several minutes on CPU)"
+            return f"INCOSE compliance check passed (score {score:.1f}/100){timing} -- starting LLM rewrite generation (this can take seconds to several minutes on CPU)"
         reason = node_output.get("rejection_reason", "")
-        return f"EARS compliance check FAILED{timing} -- rejecting without calling the LLM: {reason}"
+        return f"INCOSE compliance check FAILED (score {score:.1f}/100){timing} -- rejecting without calling the LLM: {reason}"
 
     if node_name == "RejectNonEars":
         result = node_output.get("result", {})
