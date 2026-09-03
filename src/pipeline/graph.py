@@ -1,13 +1,16 @@
 """Wires the end-to-end requirement-rewriting pipeline as a LangGraph:
 
-    Parse -> RuleFlag -> ClassifyPattern -> AbbreviationCheck -> IncoseCheck -+-> ComplianceCheck -+-> GenerateCandidates -> ScoreAndRecommend -> Finalize
-                                                                                +-> RejectNonEars    +-> RejectNonEars
+    Parse -> RuleFlag -> ClassifyPattern -> AbbreviationCheck -> ComplianceCheck -+-> IncoseCheck -+-> GenerateCandidates -> ScoreAndRecommend -> Finalize
+                                                                                    +-> RejectNonEars +-> RejectNonEars
 
 Two deterministic gates now stand between parsing and the LLM --
-IncoseCheck, then ComplianceCheck (EARS) -- and a requirement must clear
+ComplianceCheck (EARS), then IncoseCheck -- and a requirement must clear
 BOTH, in that order, before an Ollama call is ever made. Failing either one
 rejects immediately and routes straight to RejectNonEars; the other gate
-never runs.
+never runs. EARS runs first deliberately: structural validity (is this
+even a "shall" statement?) is a precondition for the INCOSE content
+checks to mean anything -- see ComplianceCheck's own docstring below for
+the measured evidence.
 
 - Parse: src/ingestion/parser.py -- either extracts a candidate requirement
   from an .xlsx file (given file_path + cell_reference), or normalizes an
@@ -36,34 +39,42 @@ never runs.
   data/golden/fewshot.json's 150 real examples (HVAC, PLC, ARINC, SCADA,
   ABS, GUI, ... none of them in any reasonable allowlist), which is
   exactly the false-positive problem this feature exists to avoid.
+- ComplianceCheck: deterministic gate, no LLM. Gates on ClassifyPattern's
+  structural verdict only -- confirmed 0 false rejections against both
+  data/golden/eval.json and fewshot.json. If ClassifyPattern couldn't
+  confidently match a recognized EARS template (UNCLEAR_LABEL), the
+  requirement is rejected outright, routed straight to RejectNonEars and
+  never reaching IncoseCheck or GenerateCandidates, instead of spending an
+  Ollama call (or a meaningless INCOSE score) on text that isn't
+  structured as EARS to begin with. Runs BEFORE IncoseCheck: measured
+  proof this order matters -- every one of the 25 hand-crafted
+  garbage/malformed examples in data/golden/compliance_gate_negatives.json
+  (empty strings, non-English text, meeting notes, wrong modal verbs)
+  scores 92-100/100 on the INCOSE gate, because a rule like "no more than
+  one 'shall' per sentence" has nothing to flag in text that isn't a
+  shall-statement at all. Checking EARS structure first means non-EARS
+  text is rejected for the honest reason before IncoseCheck ever gets a
+  chance to mis-score it as "highly compliant."
 - IncoseCheck: deterministic gate, no LLM. Runs every *other* automatable
   INCOSE rule (src/rules/incose_scorer.py's score_requirement(), the same
   scorer ScoreAndRecommend uses on candidates below) against the original
   text, excluding R1/R37/R38 -- see
   incose_scorer.PRE_LLM_GATE_EXCLUDED_RULE_IDS for why: R37/R38 were
   already checked (and already folded into rule_flags) by AbbreviationCheck
-  just above, and R1 duplicates the EARS structural check ComplianceCheck
-  runs right after this node, so none of the three would add anything here
-  beyond a redundant rejection reason. Rejects if the resulting score falls
-  below pipeline.incose_gate_threshold (config/settings.yaml) -- empirically
-  0 false rejections against both data/golden/eval.json and fewshot.json at
+  above, and R1 duplicates the EARS structural check ComplianceCheck just
+  ran, so none of the three would add anything here beyond a redundant
+  rejection reason. Rejects if the resulting score falls below
+  pipeline.incose_gate_threshold (config/settings.yaml) -- empirically 0
+  false rejections against both data/golden/eval.json and fewshot.json at
   the default 80.0, because the score is a fraction over ~25 rules, so one
   or two minor failures (a missing tolerance, one vague word) barely moves
   it; it only fires on text with many simultaneous INCOSE defects. On
   rejection, every failed rule's id/title/reason is included in
   rejection_reason so the console shows exactly what was wrong, not just a
-  number.
-- ComplianceCheck: deterministic gate, no LLM. Gates on ClassifyPattern's
-  structural verdict only -- confirmed 0 false rejections against both
-  data/golden/eval.json and fewshot.json. If ClassifyPattern couldn't
-  confidently match a recognized EARS template (UNCLEAR_LABEL), the
-  requirement is rejected outright, routed straight to RejectNonEars and
-  never reaching GenerateCandidates, instead of spending an Ollama call on
-  text that isn't structured as EARS to begin with. Only a requirement
-  that clears both IncoseCheck and this gate reaches the LLM. This is also
-  where the deterministic path's total elapsed time
-  (state["deterministic_elapsed_ms"]) is measured, since it's the last
-  node before GenerateCandidates on the pass branch.
+  number. Only a requirement that clears both this gate and ComplianceCheck
+  reaches the LLM. This is also where the deterministic path's total
+  elapsed time (state["deterministic_elapsed_ms"]) is measured, since it's
+  the last node before GenerateCandidates on the pass branch.
 - GenerateCandidates: src/llm/local_llm_client.py + src/pipeline/
   candidate_generator.py -- the only node that talks to Ollama, and the
   only slow one: everything above runs in low single-digit milliseconds
@@ -88,7 +99,7 @@ never runs.
   compliance_threshold (config/settings.yaml's pipeline.compliance_threshold)
   -- a low-scoring "best of 3" is not presented as a confident
   recommendation.
-- RejectNonEars: IncoseCheck's or ComplianceCheck's rejection branch
+- RejectNonEars: ComplianceCheck's or IncoseCheck's rejection branch
   (whichever gate actually rejected -- state["rejected_by"] says which).
   Assembles the same public result shape as Finalize (so every
   caller/consumer -- src/ui/api.py, src/storage/db.py, the frontend --
@@ -96,10 +107,10 @@ never runs.
   as the signal that no LLM rewrite was attempted; recommended_text falls
   back to the original text, and recommended_score is the original text's
   own deterministic INCOSE score (full rulebook, still no LLM involved) so
-  a real number is still shown. The specific rejection reason -- which
-  rule(s) failed and why, for an IncoseCheck rejection, or the structural
-  reason, for a ComplianceCheck rejection -- is carried in the result's
-  existing ears_pattern.reason field.
+  a real number is still shown. The specific rejection reason -- the
+  structural reason, for a ComplianceCheck rejection, or which rule(s)
+  failed and why, for an IncoseCheck rejection -- is carried in the
+  result's existing ears_pattern.reason field.
 
 Only GenerateCandidates requires a reachable Ollama instance; every other
 node is pure/offline, so build_graph() itself never touches the network --
@@ -158,16 +169,16 @@ class PipelineState(TypedDict, total=False):
     # --- AbbreviationCheck ---
     abbreviation_issues: list[str]
 
-    # --- IncoseCheck ---
-    incose_gate_score: float
-    incose_compliant: bool
-
-    # --- IncoseCheck / ComplianceCheck (whichever one rejects) ---
-    rejected_by: str  # "incose" | "ears" | "" (not rejected)
+    # --- ComplianceCheck / IncoseCheck (whichever one rejects) ---
+    rejected_by: str  # "ears" | "incose" | "" (not rejected)
     rejection_reason: str
 
     # --- ComplianceCheck ---
     ears_compliant: bool
+
+    # --- IncoseCheck ---
+    incose_gate_score: float
+    incose_compliant: bool
     deterministic_elapsed_ms: float
 
     # --- GenerateCandidates ---
@@ -189,8 +200,9 @@ class PipelineState(TypedDict, total=False):
 
 def parse_node(state: PipelineState) -> dict:
     # Stamped first, before any parsing work, so deterministic_elapsed_ms
-    # (measured later in compliance_check_node) covers the whole
-    # deterministic path rather than missing Parse's own (negligible) cost.
+    # (measured later in incose_check_node, the last deterministic gate)
+    # covers the whole deterministic path rather than missing Parse's own
+    # (negligible) cost.
     perf_start = time.perf_counter()
 
     # `in` + `is not None`, not truthiness: an empty string is a legitimate
@@ -294,12 +306,64 @@ def abbreviation_check_node(state: PipelineState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node: IncoseCheck -- the INCOSE compliance gate, run before any LLM call
-# and before ComplianceCheck (EARS). Runs the full automatable rulebook
-# minus R1/R37/R38 (see incose_scorer.PRE_LLM_GATE_EXCLUDED_RULE_IDS) and
-# rejects outright if the score falls below the configured threshold --
+# Node: ComplianceCheck -- the EARS compliance gate, run before IncoseCheck
+# and before any LLM call. Gates on ClassifyPattern's structural verdict
+# ONLY -- confirmed safe by checking it against both golden datasets (0
+# false rejections on either).
+#
+# Runs BEFORE IncoseCheck deliberately: structural validity is a
+# precondition for the INCOSE content checks to mean anything. Measured
+# proof -- every one of the 25 hand-crafted garbage/malformed examples in
+# data/golden/compliance_gate_negatives.json (empty strings, non-English
+# text, meeting notes, wrong modal verbs) scores 92-100/100 on the INCOSE
+# gate, because a rule like "no more than one 'shall' per sentence" or "no
+# passive voice" has nothing to flag in text that isn't a shall-statement
+# at all -- the absence of a violation isn't the same as good writing.
+# Running IncoseCheck first would report a high, meaningless "compliance
+# score" for text that isn't a requirement in the first place; EARS-first
+# means non-EARS text is rejected for the honest reason ("this isn't
+# structured as a requirement") before INCOSE ever gets a chance to
+# mis-score it. Final accept/reject is unaffected either way (both gates
+# still have to pass), but the order changes for the better which
+# rejection reason a human actually sees.
+#
+# AbbreviationCheck's findings are deliberately NOT part of either gate: a
+# fixed allowlist of "known" acronyms can never keep up with a real, large
+# requirement corpus. Measured against data/golden/fewshot.json (150 real
+# examples), gating on undefined acronyms would wrongly reject ~14% of
+# them (HVAC, PLC, ARINC, SCADA, ABS, GUI, ...) -- exactly the
+# false-positive problem this feature exists to avoid. So it stays
+# advisory (see AbbreviationCheck above) rather than a hard block.
+# ---------------------------------------------------------------------------
+
+
+def compliance_check_node(state: PipelineState) -> dict:
+    classification = state["ears_classification"]
+    if classification["pattern"] == UNCLEAR_LABEL:
+        return {
+            "ears_compliant": False,
+            "rejected_by": "ears",
+            "rejection_reason": classification["reason"],
+        }
+    return {"ears_compliant": True, "rejected_by": "", "rejection_reason": ""}
+
+
+def _route_after_compliance_check(state: PipelineState) -> str:
+    return "incose" if state["ears_compliant"] else "reject"
+
+
+# ---------------------------------------------------------------------------
+# Node: IncoseCheck -- the INCOSE compliance gate, run after ComplianceCheck
+# (EARS) and before any LLM call -- see ComplianceCheck's docstring above
+# for why this order and not the reverse. Runs the full automatable
+# rulebook minus R1/R37/R38 (see incose_scorer.PRE_LLM_GATE_EXCLUDED_RULE_IDS)
+# and rejects outright if the score falls below the configured threshold --
 # see the module docstring above for why 80.0 is safe (0 false rejections
 # against both golden datasets).
+#
+# Last deterministic node on the pass branch (GenerateCandidates is next),
+# so this is where the whole deterministic path's elapsed time gets
+# measured -- see parse_node's _perf_start.
 # ---------------------------------------------------------------------------
 
 
@@ -315,6 +379,8 @@ def _format_incose_gate_rejection(result: ScoreResult, threshold: float) -> str:
 
 def _make_incose_check_node(threshold: float):
     def incose_check_node(state: PipelineState) -> dict:
+        deterministic_elapsed_ms = (time.perf_counter() - state["_perf_start"]) * 1000
+
         result = score_requirement(
             state["original_text"], exclude_rule_ids=PRE_LLM_GATE_EXCLUDED_RULE_IDS
         )
@@ -324,65 +390,26 @@ def _make_incose_check_node(threshold: float):
                 "incose_compliant": False,
                 "rejected_by": "incose",
                 "rejection_reason": _format_incose_gate_rejection(result, threshold),
+                "deterministic_elapsed_ms": deterministic_elapsed_ms,
             }
         return {
             "incose_gate_score": result.score,
             "incose_compliant": True,
             "rejected_by": "",
             "rejection_reason": "",
+            "deterministic_elapsed_ms": deterministic_elapsed_ms,
         }
 
     return incose_check_node
 
 
 def _route_after_incose_check(state: PipelineState) -> str:
-    return "ears" if state["incose_compliant"] else "reject"
+    return "generate" if state["incose_compliant"] else "reject"
 
 
 # ---------------------------------------------------------------------------
-# Node: ComplianceCheck -- the EARS compliance gate, run after IncoseCheck
-# and before any LLM call. Gates on ClassifyPattern's structural verdict
-# ONLY -- confirmed safe by checking it against both golden datasets (0
-# false rejections on either).
-#
-# AbbreviationCheck's findings are deliberately NOT part of either gate: a
-# fixed allowlist of "known" acronyms can never keep up with a real, large
-# requirement corpus. Measured against data/golden/fewshot.json (150 real
-# examples), gating on undefined acronyms would wrongly reject ~14% of
-# them (HVAC, PLC, ARINC, SCADA, ABS, GUI, ...) -- exactly the
-# false-positive problem this feature exists to avoid. So it stays
-# advisory (see AbbreviationCheck above) rather than a hard block.
-# ---------------------------------------------------------------------------
-
-
-def compliance_check_node(state: PipelineState) -> dict:
-    # Last deterministic node on the pass branch (GenerateCandidates is
-    # next), so this is where the whole deterministic path's elapsed time
-    # gets measured -- see parse_node's _perf_start.
-    deterministic_elapsed_ms = (time.perf_counter() - state["_perf_start"]) * 1000
-
-    classification = state["ears_classification"]
-    if classification["pattern"] == UNCLEAR_LABEL:
-        return {
-            "ears_compliant": False,
-            "rejected_by": "ears",
-            "rejection_reason": classification["reason"],
-            "deterministic_elapsed_ms": deterministic_elapsed_ms,
-        }
-    return {
-        "ears_compliant": True,
-        "rejected_by": "",
-        "rejection_reason": "",
-        "deterministic_elapsed_ms": deterministic_elapsed_ms,
-    }
-
-
-def _route_after_compliance_check(state: PipelineState) -> str:
-    return "generate" if state["ears_compliant"] else "reject"
-
-
-# ---------------------------------------------------------------------------
-# Node: RejectNonEars -- ComplianceCheck's rejection branch (no LLM call)
+# Node: RejectNonEars -- ComplianceCheck's or IncoseCheck's rejection
+# branch (whichever one actually rejected), no LLM call
 # ---------------------------------------------------------------------------
 
 
@@ -535,8 +562,8 @@ def build_graph(
     graph.add_node("RuleFlag", rule_flag_node)
     graph.add_node("ClassifyPattern", classify_pattern_node)
     graph.add_node("AbbreviationCheck", abbreviation_check_node)
-    graph.add_node("IncoseCheck", _make_incose_check_node(incose_gate_threshold))
     graph.add_node("ComplianceCheck", compliance_check_node)
+    graph.add_node("IncoseCheck", _make_incose_check_node(incose_gate_threshold))
     graph.add_node("RejectNonEars", _make_reject_node(compliance_threshold))
     graph.add_node("GenerateCandidates", _make_generate_candidates_node(client))
     graph.add_node("ScoreAndRecommend", score_and_recommend_node)
@@ -546,15 +573,15 @@ def build_graph(
     graph.add_edge("Parse", "RuleFlag")
     graph.add_edge("RuleFlag", "ClassifyPattern")
     graph.add_edge("ClassifyPattern", "AbbreviationCheck")
-    graph.add_edge("AbbreviationCheck", "IncoseCheck")
-    graph.add_conditional_edges(
-        "IncoseCheck",
-        _route_after_incose_check,
-        {"ears": "ComplianceCheck", "reject": "RejectNonEars"},
-    )
+    graph.add_edge("AbbreviationCheck", "ComplianceCheck")
     graph.add_conditional_edges(
         "ComplianceCheck",
         _route_after_compliance_check,
+        {"incose": "IncoseCheck", "reject": "RejectNonEars"},
+    )
+    graph.add_conditional_edges(
+        "IncoseCheck",
+        _route_after_incose_check,
         {"generate": "GenerateCandidates", "reject": "RejectNonEars"},
     )
     graph.add_edge("GenerateCandidates", "ScoreAndRecommend")
@@ -594,12 +621,13 @@ def run_requirement_streaming(
     graph via .stream(..., stream_mode="updates") instead of .invoke() so
     ``on_stage(node_name, node_output)`` -- if given -- fires after each
     node completes (Parse, RuleFlag, ClassifyPattern, AbbreviationCheck,
-    IncoseCheck, then either straight to RejectNonEars if IncoseCheck
-    rejected, or ComplianceCheck followed by either GenerateCandidates ->
-    ScoreAndRecommend -> Finalize or RejectNonEars, whichever branch
-    ComplianceCheck routes to), not just once at the end. Used by
-    src/ui/api.py to report live per-requirement progress; existing
-    callers that just want the final result keep using run_requirement().
+    ComplianceCheck, then either straight to RejectNonEars if
+    ComplianceCheck rejected, or IncoseCheck followed by either
+    GenerateCandidates -> ScoreAndRecommend -> Finalize or RejectNonEars,
+    whichever branch IncoseCheck routes to), not just once at the end.
+    Used by src/ui/api.py to report live per-requirement progress;
+    existing callers that just want the final result keep using
+    run_requirement().
     """
     initial_state: PipelineState = {"requirement_text": requirement_text}
     if source_location is not None:

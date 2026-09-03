@@ -140,12 +140,21 @@ function ReviewContent() {
         <div className="space-y-6">
           {filteredRequirements.map((req) => {
             const seq = req.sequence_in_run + 1;
-            // Rejected by src/pipeline/graph.py's IncoseCheck or
-            // ComplianceCheck gate (whichever ran first and failed) before
-            // ever reaching the LLM -- signaled by no candidates and no
-            // recommended candidate index (see RejectNonEars in graph.py).
-            // The specific gate and reason are in req.ears_pattern.reason.
+            // Rejected by src/pipeline/graph.py's ComplianceCheck (EARS,
+            // runs first) or IncoseCheck (runs second) gate -- whichever
+            // one actually failed -- before ever reaching the LLM, signaled
+            // by no candidates and no recommended candidate index (see
+            // RejectNonEars in graph.py). RejectNonEars writes the reason
+            // as "Rejected -- not EARS compliant: ..." or "Rejected -- not
+            // INCOSE compliant: ...", so which literal substring is present
+            // is how the frontend tells the two apart (no separate
+            // "rejected_by" field is persisted -- see graph.py's
+            // RejectNonEars docstring for why the reason string carries it).
             const isRejected = req.candidates.length === 0 && req.recommended_index === -1;
+            const rejectionReason = req.ears_pattern?.reason || "";
+            const rejectedByGate = rejectionReason.includes("not INCOSE compliant")
+              ? "INCOSE"
+              : "EARS";
 
             return (
               <motion.div
@@ -168,7 +177,7 @@ function ReviewContent() {
                   <div className="flex items-center gap-2">
                     {isRejected ? (
                       <span className="px-2.5 py-1 rounded-full bg-[#FF4D4F]/15 text-[#FF4D4F] border border-[#FF4D4F]/30 text-xs font-semibold">
-                        Rejected — Not EARS Compliant
+                        Rejected — Not {rejectedByGate} Compliant
                       </span>
                     ) : req.needs_human_review ? (
                       <span className="px-2.5 py-1 rounded-full bg-[#FFB300]/15 text-[#FFB300] border border-[#FFB300]/30 text-xs font-semibold">
@@ -185,6 +194,21 @@ function ReviewContent() {
                     </span>
                   </div>
                 </div>
+
+                {/* Rejection reason -- the specific rule(s)/reason that
+                    made ComplianceCheck or IncoseCheck reject this
+                    requirement before it ever reached the LLM. This is the
+                    only place that reason is shown after the run finishes
+                    -- the live Execution Console on the Processing page
+                    shows it too, but that view is gone once you leave it. */}
+                {isRejected && rejectionReason && (
+                  <div className="p-3.5 rounded-xl bg-[#FF4D4F]/10 border border-[#FF4D4F]/30 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-[#FF4D4F] mt-0.5" />
+                    <p className="text-xs text-[#FF4D4F] leading-relaxed font-mono">
+                      {rejectionReason}
+                    </p>
+                  </div>
+                )}
 
                 {/* Original Requirement Statement */}
                 <div className="space-y-1.5">
