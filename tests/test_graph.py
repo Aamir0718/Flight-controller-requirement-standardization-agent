@@ -14,7 +14,14 @@ from pathlib import Path
 import pytest
 
 from llm.local_llm_client import LLMResult, VagueTermSuggestion
-from pipeline.graph import PipelineState, build_graph, run_requirement, run_workbook
+from pipeline.graph import (
+    PipelineState,
+    analyze_requirement,
+    build_graph,
+    generate_requirement,
+    run_requirement,
+    run_workbook,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -267,6 +274,115 @@ class TestIncoseGate:
         result = run_requirement(graph, self.HEAVILY_DEFECTIVE_TEXT)
         if expected > 72.0:
             assert result["candidates"] == []
+
+
+class TestAnalyzeRequirement:
+    """analyze_requirement(): the deterministic-only phase, no LLM call --
+    runs on every requirement immediately on upload now, not just the ones
+    that clear both gates."""
+
+    def test_never_touches_the_llm(self):
+        # No client is even passed in -- if this tried to call one it
+        # would raise, not silently skip.
+        result = analyze_requirement(VAGUE_TEXT)
+        assert result["candidates"] == []
+        assert result["recommended_index"] == -1
+        assert result["status"] == "analyzed"
+
+    def test_clean_ears_valid_text_passes_the_gate(self):
+        result = analyze_requirement(CLEAN_TEXT)
+        assert result["gate_passed"] is True
+        assert result["violations"] == []
+        assert result["recommended_score"] > 80.0
+        # Nothing has been generated or edited yet -- always flagged until
+        # a human acts on it.
+        assert result["needs_human_review"] is True
+
+    def test_garbage_text_fails_the_gate_with_a_named_reason(self):
+        result = analyze_requirement("TODO: figure out the threshold with flight test next week.")
+        assert result["gate_passed"] is False
+        assert "Not EARS compliant" in result["ears_pattern"]["reason"]
+
+    def test_incose_defective_but_ears_valid_text_fails_the_gate_with_violations(self):
+        text = (
+            "The system shall be user friendly and shall optimize performance rapidly, "
+            "handling all cases quickly and efficiently, etc."
+        )
+        result = analyze_requirement(text)
+        assert result["gate_passed"] is False
+        assert "Not INCOSE compliant" in result["ears_pattern"]["reason"]
+        assert len(result["violations"]) > 0
+        assert all({"id", "title", "reasons"} <= set(v.keys()) for v in result["violations"])
+
+    def test_original_text_never_modified(self):
+        result = analyze_requirement(VAGUE_TEXT)
+        assert result["original_text"] == VAGUE_TEXT
+        assert result["recommended_text"] == VAGUE_TEXT
+
+    def test_source_location_passed_through(self):
+        loc = {"sheet_name": "Requirements", "cell_reference": "B7"}
+        result = analyze_requirement(VAGUE_TEXT, source_location=loc)
+        assert result["source_location"] == loc
+
+
+class TestGenerateRequirement:
+    """generate_requirement(): the LLM phase, run only for a requirement a
+    human explicitly asked for -- takes analyze_requirement()'s output
+    directly, no re-parsing."""
+
+    def test_runs_the_llm_and_returns_scored_candidates(self):
+        analyzed = analyze_requirement(VAGUE_TEXT)
+        client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
+        result = generate_requirement(analyzed, client)
+
+        assert len(client.calls) == 3
+        assert len(result["candidates"]) == 3
+        assert result["status"] == "generated"
+
+    def test_runs_even_when_analysis_gate_failed_since_a_human_asked_for_it(self):
+        # No hard block: the deterministic gates decide whether the LLM
+        # runs automatically; a human clicking Generate is a separate,
+        # explicit decision and is always honored.
+        analyzed = analyze_requirement(
+            "TODO: figure out the threshold with flight test next week."
+        )
+        assert analyzed["gate_passed"] is False
+        client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
+        result = generate_requirement(analyzed, client)
+        assert len(result["candidates"]) == 3
+
+    def test_compliant_llm_output_is_not_flagged(self):
+        analyzed = analyze_requirement(VAGUE_TEXT)
+        client = FakeLLMClient([COMPLIANT_REWRITE, COMPLIANT_REWRITE, COMPLIANT_REWRITE])
+        result = generate_requirement(analyzed, client)
+        assert result["llm_recheck_passed"] is True
+        assert result["needs_human_review"] is False
+
+    def test_non_ears_llm_output_is_caught_and_flagged_even_with_a_good_score(self):
+        # The LLM claims a pattern/confidence of its own, but its actual
+        # text doesn't have a "shall" -- recheck must look at the real
+        # text, not trust the LLM's self-report.
+        class ClaimsCompliantButIsnt:
+            temperature = 0.2
+
+            def generate_structured(self, system_prompt, user_prompt, *, temperature=None, seed=None):
+                return LLMResult(
+                    pattern="Ubiquitous",
+                    rewritten_text="the system should probably handle this somehow",
+                    vague_terms=[], confidence=0.95, notes="", raw={},
+                )
+
+        analyzed = analyze_requirement(VAGUE_TEXT)
+        result = generate_requirement(analyzed, ClaimsCompliantButIsnt())
+        assert result["llm_recheck_passed"] is False
+        assert result["needs_human_review"] is True
+        assert "LLM output failed EARS re-check" in result["ears_pattern"]["reason"]
+
+    def test_source_location_carried_from_analyzed(self):
+        loc = {"sheet_name": "Requirements", "cell_reference": "B7"}
+        analyzed = analyze_requirement(VAGUE_TEXT, source_location=loc)
+        result = generate_requirement(analyzed, FakeLLMClient())
+        assert result["source_location"] == loc
 
 
 class TestErrorHandling:

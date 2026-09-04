@@ -1,10 +1,10 @@
 """Unit tests for src/llm/local_llm_client.py.
 
-These never touch the network: check_reachable()'s underlying ollama call
+These never touch the network: check_reachable()'s underlying HTTP calls
 and _chat() are monkeypatched so the suite stays fast and doesn't require
-a running Ollama instance. The one test that talks to a real (if
-reachable) Ollama instance lives in tests/test_llm_integration.py and
-auto-skips when it isn't running.
+a real, reachable vLLM endpoint. The one test that talks to a real (if
+reachable) endpoint lives in tests/test_llm_integration.py and auto-skips
+when it isn't running.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ from llm.local_llm_client import (
     LLMResponseError,
     LLMResult,
     LocalLLMClient,
-    OllamaUnavailableError,
+    LLMUnavailableError,
 )
 
 SETTINGS = {
-    "ollama": {
-        "host": "localhost",
-        "port": 11434,
+    "llm": {
+        "base_url": "http://localhost:8001/v1",
         "model": "llama3.1",
+        "api_key": "",
         "request_timeout_seconds": 5,
         "temperature": 0.2,
     }
@@ -42,60 +42,92 @@ def _client() -> LocalLLMClient:
     return LocalLLMClient(settings=SETTINGS)
 
 
+def _fake_response(status_code: int = 200, json_body: dict | None = None, text_body: str = "") -> httpx.Response:
+    request = httpx.Request("POST", "http://localhost:8001/v1/chat/completions")
+    if json_body is not None:
+        return httpx.Response(status_code, request=request, json=json_body)
+    return httpx.Response(status_code, request=request, text=text_body)
+
+
+def _openai_response(content: str) -> httpx.Response:
+    return _fake_response(200, {"choices": [{"message": {"content": content}}]})
+
+
 class TestConfigDrivenSettings:
-    def test_reads_model_host_port_from_given_settings_not_hardcoded(self):
+    def test_reads_model_base_url_from_given_settings_not_hardcoded(self):
         custom = {
-            "ollama": {
-                "host": "some-other-host",
-                "port": 22222,
+            "llm": {
+                "base_url": "http://some-other-host:22222/v1",
                 "model": "totally-different-model",
+                "api_key": "",
                 "request_timeout_seconds": 7,
                 "temperature": 0.9,
             }
         }
         client = LocalLLMClient(settings=custom)
         assert client.model == "totally-different-model"
-        assert client.host == "http://some-other-host:22222"
+        assert client.base_url == "http://some-other-host:22222/v1"
         assert client.request_timeout_seconds == 7
         assert client.temperature == 0.9
 
     def test_reads_real_project_config_when_no_settings_given(self):
         from config import get_settings
 
-        expected = get_settings()["ollama"]
+        expected = get_settings()["llm"]
         client = LocalLLMClient()
         assert client.model == expected["model"]
-        assert client.host == f"http://{expected['host']}:{expected['port']}"
+        assert client.base_url == expected["base_url"].rstrip("/")
+
+    def test_trailing_slash_on_base_url_is_stripped(self):
+        client = LocalLLMClient(settings={"llm": {**SETTINGS["llm"], "base_url": "http://x:8001/v1/"}})
+        assert client.base_url == "http://x:8001/v1"
+
+    def test_no_api_key_means_no_authorization_header(self):
+        client = _client()
+        assert "Authorization" not in client._client.headers
+
+    def test_api_key_becomes_a_bearer_authorization_header(self):
+        client = LocalLLMClient(settings={"llm": {**SETTINGS["llm"], "api_key": "secret-token"}})
+        assert client._client.headers["Authorization"] == "Bearer secret-token"
 
 
 class TestReachability:
     def test_check_reachable_raises_clear_error_when_unreachable(self, monkeypatch):
         client = _client()
         monkeypatch.setattr(
-            client._client, "list", lambda: (_ for _ in ()).throw(httpx.ConnectError("refused"))
+            client._client, "get", lambda path: (_ for _ in ()).throw(httpx.ConnectError("refused"))
         )
-        with pytest.raises(OllamaUnavailableError) as exc_info:
+        with pytest.raises(LLMUnavailableError) as exc_info:
             client.check_reachable()
         message = str(exc_info.value)
         assert "llama3.1" in message
-        assert "localhost:11434" in message
+        assert "localhost:8001" in message
 
     def test_check_reachable_passes_when_reachable(self, monkeypatch):
         client = _client()
-        monkeypatch.setattr(client._client, "list", lambda: {"models": []})
+        monkeypatch.setattr(client._client, "get", lambda path: _fake_response(200, {"data": []}))
         client.check_reachable()  # must not raise
+
+    def test_check_reachable_raises_on_error_status_code(self, monkeypatch):
+        client = _client()
+        monkeypatch.setattr(
+            client._client, "get", lambda path: _fake_response(401, text_body="Unauthorized")
+        )
+        with pytest.raises(LLMUnavailableError) as exc_info:
+            client.check_reachable()
+        assert "401" in str(exc_info.value)
 
     def test_generate_structured_checks_reachability_before_chatting(self, monkeypatch):
         client = _client()
         monkeypatch.setattr(
-            client._client, "list", lambda: (_ for _ in ()).throw(httpx.ConnectError("refused"))
+            client._client, "get", lambda path: (_ for _ in ()).throw(httpx.ConnectError("refused"))
         )
         chat_called = []
         monkeypatch.setattr(
             client, "_chat", lambda messages, *args, **kwargs: chat_called.append(messages)
         )
 
-        with pytest.raises(OllamaUnavailableError):
+        with pytest.raises(LLMUnavailableError):
             client.generate_structured("system", "user")
         assert chat_called == []  # never attempted a chat call
 
@@ -122,35 +154,64 @@ class TestStructuredJsonEnforcement:
         assert result.vague_terms[0].term == "quickly"
         assert len(calls) == 1  # no retry needed
 
-    def test_temperature_and_seed_overrides_reach_the_ollama_call(self, monkeypatch):
+    def test_request_body_has_openai_shape_with_temperature_and_seed(self, monkeypatch):
         client = _client()
         monkeypatch.setattr(client, "check_reachable", lambda: None)
-        seen_options = []
+        seen_payloads = []
 
-        def fake_ollama_chat(model, messages, format, options):
-            seen_options.append(options)
-            return {"message": {"content": VALID_JSON_RESPONSE}}
+        def fake_post(path, json):
+            seen_payloads.append(json)
+            return _openai_response(VALID_JSON_RESPONSE)
 
-        monkeypatch.setattr(client._client, "chat", fake_ollama_chat)
+        monkeypatch.setattr(client._client, "post", fake_post)
 
         client.generate_structured("system", "user", temperature=0.9, seed=42)
 
-        assert seen_options == [{"temperature": 0.9, "seed": 42}]
+        assert seen_payloads[0]["model"] == "llama3.1"
+        assert seen_payloads[0]["temperature"] == 0.9
+        assert seen_payloads[0]["seed"] == 42
+        assert seen_payloads[0]["response_format"] == {"type": "json_object"}
+        assert seen_payloads[0]["messages"] == [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "user"},
+        ]
 
-    def test_omitted_temperature_and_seed_fall_back_to_config_defaults(self, monkeypatch):
+    def test_omitted_temperature_and_seed_fall_back_to_config_default_and_no_seed_key(self, monkeypatch):
         client = _client()
         monkeypatch.setattr(client, "check_reachable", lambda: None)
-        seen_options = []
+        seen_payloads = []
 
-        def fake_ollama_chat(model, messages, format, options):
-            seen_options.append(options)
-            return {"message": {"content": VALID_JSON_RESPONSE}}
+        def fake_post(path, json):
+            seen_payloads.append(json)
+            return _openai_response(VALID_JSON_RESPONSE)
 
-        monkeypatch.setattr(client._client, "chat", fake_ollama_chat)
+        monkeypatch.setattr(client._client, "post", fake_post)
 
         client.generate_structured("system", "user")
 
-        assert seen_options == [{"temperature": client.temperature}]
+        assert seen_payloads[0]["temperature"] == client.temperature
+        assert "seed" not in seen_payloads[0]
+
+    def test_connectivity_failure_during_chat_raises_llm_unavailable(self, monkeypatch):
+        client = _client()
+        monkeypatch.setattr(client, "check_reachable", lambda: None)
+        monkeypatch.setattr(
+            client._client, "post", lambda path, json: (_ for _ in ()).throw(httpx.ConnectError("refused"))
+        )
+        with pytest.raises(LLMUnavailableError):
+            client.generate_structured("system", "user")
+
+    def test_error_status_during_chat_raises_llm_unavailable_with_body(self, monkeypatch):
+        client = _client()
+        monkeypatch.setattr(client, "check_reachable", lambda: None)
+        monkeypatch.setattr(
+            client._client,
+            "post",
+            lambda path, json: _fake_response(400, text_body="model 'llama3.1' not found"),
+        )
+        with pytest.raises(LLMUnavailableError) as exc_info:
+            client.generate_structured("system", "user")
+        assert "not found" in str(exc_info.value)
 
     def test_strips_markdown_code_fences(self, monkeypatch):
         client = _client()

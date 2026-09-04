@@ -1,12 +1,27 @@
 """FastAPI backend for the Flight Controller Requirements Agent.
 
-Deliberately simple: one endpoint to upload a spreadsheet and kick off the
-pipeline, one to poll run status, one to fetch the per-requirement results,
-one to download the reviewed Excel export. No auth, no task queue, no
-websockets -- an in-process FastAPI BackgroundTasks call and the same
-local SQLite file src/storage/db.py already uses are enough for a
-single-user local tool that, per this project's README, never talks to
-anything but a loopback Ollama instance.
+Two-phase, deliberately split (see src/pipeline/graph.py's module
+docstring for the full rationale):
+
+  1. POST /upload parses the workbook and runs analyze_requirement() --
+     deterministic only, no LLM -- on every requirement SYNCHRONOUSLY
+     (sub-millisecond each, so even a few hundred requirements return
+     before the request times out). The client gets EARS pattern, INCOSE
+     score, and every violation for the whole workbook back immediately.
+  2. A human then decides, per requirement (or in bulk): POST
+     /runs/{id}/requirements/generate to send it to the LLM, or PUT
+     /runs/{id}/requirements/{req_id} to type a replacement themselves.
+     Only step 2 ever talks to the LLM endpoint, and only for the rows a
+     human actually asked for -- never automatically for a whole workbook.
+
+No auth, no task queue, no websockets -- in-process FastAPI
+BackgroundTasks (for the LLM generate step only) and the same local
+SQLite file src/storage/db.py already uses are enough for a single-user
+local tool. The only network call this app ever makes is to the
+DRDO-internal vLLM endpoint configured in config/settings.yaml's
+llm.base_url -- never a public/hosted API -- and only from the Generate
+action and consistency's contradiction check; everything else (analysis,
+manual edit, export) is local and works with that endpoint unreachable.
 
 Run it (binds to loopback by default, matching the offline requirement):
     uvicorn ui.api:app --app-dir src
@@ -23,12 +38,13 @@ from zipfile import BadZipFile
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 import storage.db as db
 from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
-from llm.local_llm_client import LocalLLMClient
-from pipeline.graph import build_graph, run_requirement_streaming
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError
+from pipeline.graph import analyze_requirement, generate_requirement
 from config import get_settings
 from ui import progress
 
@@ -126,7 +142,7 @@ def _error_code_for_exception(exc: Exception) -> str | None:
         return INVALID_EXCEL_FILE
 
     # LLM-related errors
-    if exc_name == "OllamaUnavailableError":
+    if exc_name == "LLMUnavailableError":
         return AI_SERVICE_UNAVAILABLE
     if exc_name == "LLMResponseError":
         return AI_RESPONSE_VALIDATION_FAILED
@@ -141,176 +157,96 @@ def _error_code_for_exception(exc: Exception) -> str | None:
 @app.get("/health")
 def health() -> dict[str, str]:
     settings = get_settings()
-    return {"status": "ok", "model": settings["ollama"]["model"]}
+    return {"status": "ok", "model": settings["llm"]["model"]}
 
 
-def _describe_stage(node_name: str, node_output: dict) -> str:
-    """Turns one LangGraph node's raw output into a human-readable console
-    line for the live progress log -- e.g. "3 candidate rewrites generated
-    via Ollama" rather than dumping the raw state dict."""
-    if node_name == "Parse":
-        text = node_output.get("original_text", "")
-        return f"Parsed requirement text ({len(text)} chars)"
+def _analyze_run(conn: sqlite3.Connection, run_id: int, file_path: Path) -> None:
+    """Runs analyze_requirement() -- deterministic only, no LLM -- against
+    every requirement in ``file_path`` and saves each result immediately.
+    Called synchronously from POST /upload, not as a background task:
+    even a few hundred requirements finish in well under a second (see
+    analyze_requirement()'s own timing), so there's nothing to poll for
+    and no reason to make the client wait through a "processing" status
+    for what is, start to finish, sub-second work.
+    """
+    db.update_run_status(conn, run_id, "processing")
 
-    if node_name == "RuleFlag":
-        flags = node_output.get("rule_flags", [])
-        if not flags:
-            return "No rule violations detected"
-        types = ", ".join(f["violation_type"] for f in flags)
-        return f"{len(flags)} rule flag(s) detected: {types}"
-
-    if node_name == "ClassifyPattern":
-        classification = node_output.get("ears_classification", {})
-        pattern = classification.get("pattern", "unknown")
-        confidence = classification.get("confidence", 0.0)
-        return f"EARS pattern classified as '{pattern}' (confidence {confidence:.2f})"
-
-    if node_name == "AbbreviationCheck":
-        issues = node_output.get("abbreviation_issues", [])
-        if not issues:
-            return "No undefined acronyms or informal abbreviations found"
-        return f"{len(issues)} abbreviation issue(s) found: " + " ".join(issues)
-
-    if node_name == "ComplianceCheck":
-        compliant = node_output.get("ears_compliant", False)
-        if compliant:
-            return "EARS compliance check passed -- proceeding to INCOSE check"
-        reason = node_output.get("rejection_reason", "")
-        return f"EARS compliance check FAILED -- rejecting without checking INCOSE or calling the LLM: {reason}"
-
-    if node_name == "IncoseCheck":
-        compliant = node_output.get("incose_compliant", False)
-        score = node_output.get("incose_gate_score", 0.0)
-        elapsed_ms = node_output.get("deterministic_elapsed_ms")
-        timing = f" [all deterministic checks done in {elapsed_ms:.2f} ms]" if elapsed_ms is not None else ""
-        if compliant:
-            return f"INCOSE compliance check passed (score {score:.1f}/100){timing} -- starting LLM rewrite generation (this can take seconds to several minutes on CPU)"
-        reason = node_output.get("rejection_reason", "")
-        return f"INCOSE compliance check FAILED (score {score:.1f}/100){timing} -- rejecting without calling the LLM: {reason}"
-
-    if node_name == "RejectNonEars":
-        result = node_output.get("result", {})
-        reason = result.get("ears_pattern", {}).get("reason", "not EARS/INCOSE compliant")
-        return f"Requirement REJECTED: {reason}"
-
-    if node_name == "GenerateCandidates":
-        candidates = node_output.get("candidates_raw", [])
-        elapsed_ms = node_output.get("llm_elapsed_ms")
-        timing = f" in {elapsed_ms / 1000:.1f}s" if elapsed_ms is not None else ""
-        return f"{len(candidates)} candidate rewrite(s) generated via Ollama{timing}"
-
-    if node_name == "ScoreAndRecommend":
-        recommendation = node_output.get("recommendation")
-        if recommendation is None:
-            return "Candidates scored via INCOSE rule engine"
-        recommended = recommendation.recommended
-        return (
-            f"Recommended candidate #{recommendation.recommended_index + 1} "
-            f"(INCOSE score {recommended.score:.1f}/100)"
+    parse_result = parse_workbook(file_path)
+    if parse_result.issues:
+        db.update_run_status(
+            conn, run_id, "failed", error_message=_error_code_for_parse_issues(parse_result.issues)
         )
+        return
+    total = len(parse_result.candidates)
+    db.set_run_total_requirements(conn, run_id, total)
 
-    if node_name == "Finalize":
-        needs_review = node_output.get("needs_human_review", False)
-        return (
-            "Flagged for human review"
-            if needs_review
-            else "Ready for export -- no human review required"
-        )
+    for i, candidate in enumerate(parse_result.candidates):
+        result = analyze_requirement(candidate.text, source_location=asdict(candidate.location))
+        db.save_requirement(conn, run_id, i, result)
 
-    return "Stage completed"
+    db.update_run_status(conn, run_id, "completed")
 
 
-def _process_run(run_id: int, file_path: Path) -> None:
-    """Runs the full pipeline against every requirement in ``file_path``
-    and saves each result as it completes. Always leaves the run in
-    'completed' or 'failed' status -- never raises out of a background
-    task, since FastAPI would just log and silently drop the exception.
+def _generate_selected(run_id: int, requirement_ids: list[int]) -> None:
+    """Background task for POST /runs/{run_id}/requirements/generate: runs
+    the LLM phase for exactly the requirement ids a human selected, one at
+    a time, marking each row "generating" right before its call starts so
+    a client polling GET /runs/{run_id}/requirements sees live per-row
+    progress without any separate console/stage machinery -- the status
+    column IS the progress indicator.
 
-    Also streams live stage-by-stage progress (see src/ui/progress.py) so
-    the frontend's Processing Status page can show, in real time, exactly
-    which pipeline stage (Parse, RuleFlag, ClassifyPattern, AbbreviationCheck,
-    IncoseCheck, ComplianceCheck, GenerateCandidates, ScoreAndRecommend,
-    Finalize) is running for which requirement.
+    Never raises out of a background task (FastAPI would just log and
+    silently drop the exception) -- a failure marks that one row "failed"
+    with a friendly error code and moves on to the next id, rather than
+    losing the whole selection because one requirement's call errored.
     """
     conn = db.connect()
-    progress.start_run(run_id)
     try:
-        db.update_run_status(conn, run_id, "processing")
-
-        parse_result = parse_workbook(file_path)
-        if parse_result.issues:
-            db.update_run_status(
-                conn,
-                run_id,
-                "failed",
-                error_message=_error_code_for_parse_issues(parse_result.issues),
-            )
-            return
-        total = len(parse_result.candidates)
-        db.set_run_total_requirements(conn, run_id, total)
-
         client = LocalLLMClient()
-        client.check_reachable()
-        compiled_graph = build_graph(client=client)
-
-        for i, candidate in enumerate(parse_result.candidates):
-            progress.record(
-                run_id, i, "Start", f"Processing requirement {i + 1} of {total}", status="running"
-            )
-
-            def _on_stage(node_name: str, node_output: dict, _i: int = i) -> None:
-                progress.record(run_id, _i, node_name, _describe_stage(node_name, node_output))
-
-            result = run_requirement_streaming(
-                compiled_graph,
-                candidate.text,
-                source_location=asdict(candidate.location),
-                on_stage=_on_stage,
-            )
-            db.save_requirement(conn, run_id, i, result)
-
-        # Run consistency analysis after all requirements are processed
-        progress.record(
-            run_id, total - 1, "ConsistencyAnalysis",
-            "Running cross-requirement consistency analysis...", status="running",
-        )
-        _run_consistency_analysis(conn, run_id)
-        progress.record(
-            run_id, total - 1, "ConsistencyAnalysis", "Consistency analysis complete"
-        )
-
-        db.update_run_status(conn, run_id, "completed")
-    except Exception as exc:  # noqa: BLE001 -- always record, a background task must not fail silently
-        friendly_code = _error_code_for_exception(exc)
-
-        # Log full technical error for debugging
-        import traceback
-        import sys
         try:
-            print(f"Error processing run {run_id}: {exc}")
-            traceback.print_exc()
-        except UnicodeEncodeError:
-            # Fallback for Windows console encoding issues
-            print(f"Error processing run {run_id}: {repr(exc)}")
-            traceback.print_exc(file=sys.stderr)
+            client.check_reachable()
+        except LLMUnavailableError:
+            for req_id in requirement_ids:
+                db.update_requirement_status(conn, req_id, "failed", error_message=AI_SERVICE_UNAVAILABLE)
+            return
 
-        # Store user-friendly error code in database
-        error_message = friendly_code if friendly_code else AI_UNKNOWN_ERROR
-        db.update_run_status(conn, run_id, "failed", error_message=error_message)
+        for req_id in requirement_ids:
+            analyzed = db.get_requirement(conn, req_id)
+            if analyzed is None:
+                continue
+            db.update_requirement_status(conn, req_id, "generating")
+            try:
+                result = generate_requirement(analyzed, client)
+                db.apply_generation_result(conn, req_id, result)
+            except Exception as exc:  # noqa: BLE001 -- one bad row must not stop the rest
+                friendly_code = _error_code_for_exception(exc) or AI_UNKNOWN_ERROR
+                print(f"Error generating requirement {req_id} (run {run_id}): {exc}")
+                import traceback
+                traceback.print_exc()
+                db.update_requirement_status(conn, req_id, "failed", error_message=friendly_code)
     finally:
         conn.close()
 
 
-def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> None:
-    """Runs consistency analysis on all requirements in a run.
-    
-    This is called after all requirements have been processed.
-    Failures here should not fail the entire run - we log and continue.
+def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> bool:
+    """Runs consistency analysis on all requirements in a run -- duplicate/
+    similarity detection is pure embeddings (no LLM); contradiction
+    detection needs the LLM endpoint and is skipped (not a failure) if
+    it isn't reachable, checked once for the whole run, not once per pair
+    -- see ConsistencyAnalyzer._is_llm_reachable(). Failures here should
+    not fail the entire run - we log and continue.
+
+    Returns True if contradiction detection was skipped because the LLM
+    endpoint wasn't reachable (duplicate/similarity results are still
+    valid and saved either way) -- callers use this to tell the human
+    "duplicates and similar pairs were found; contradiction checking
+    needs the LLM endpoint reachable" instead of silently under-reporting
+    contradictions.
     """
     try:
         requirements = db.get_requirements_for_run(conn, run_id)
         if len(requirements) < 2:
-            return  # Not enough requirements to analyze
+            return False  # Not enough requirements to analyze
 
         # Clear any existing relationships for this run to avoid stale data
         conn.execute("DELETE FROM requirement_relationships WHERE run_id = ?", (run_id,))
@@ -342,19 +278,27 @@ def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> None:
             )
 
         print(f"Consistency analysis completed for run {run_id}: {len(result.relationships)} relationships found")
+        return result.contradiction_check_skipped
 
     except Exception as exc:  # noqa: BLE001 -- consistency analysis failure should not fail the run
         # Log the error but don't fail the entire run
         print(f"Consistency analysis failed for run {run_id}: {exc}")
         import traceback
         traceback.print_exc()
+        return False
 
 
 @app.post("/upload")
-async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict:
-    """Saves the uploaded spreadsheet, creates a run row, and schedules
-    pipeline processing in the background. Returns immediately with a
-    run_id the client polls via GET /runs/{run_id}.
+async def upload(file: UploadFile = File(...)) -> dict:
+    """Saves the uploaded spreadsheet, creates a run row, and runs the
+    deterministic analysis phase (analyze_requirement() for every
+    requirement -- EARS pattern, INCOSE score, violations, no LLM)
+    SYNCHRONOUSLY before responding: sub-second even for a large workbook,
+    so the client gets the full analysis table back in this one response
+    instead of polling a "processing" status for it. The run is already
+    "completed" (analysis-complete) by the time this returns; LLM
+    generation is a separate, later, per-requirement action -- see POST
+    /runs/{run_id}/requirements/generate.
     """
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported.")
@@ -378,20 +322,18 @@ async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)
     final_path = _get_run_upload_dir(run_id) / "input" / file.filename
     temp_path.rename(final_path)
 
-    # Step 5: Update database with new file path
+    # Step 5: Update database with new file path, then run analysis --
+    # same connection, no background task: this is the whole request.
     conn = db.connect()
     try:
-        conn.execute(
-            "UPDATE runs SET file_path = ? WHERE id = ?",
-            (str(final_path), run_id)
-        )
+        conn.execute("UPDATE runs SET file_path = ? WHERE id = ?", (str(final_path), run_id))
         conn.commit()
+        _analyze_run(conn, run_id, final_path)
+        run = db.get_run(conn, run_id)
     finally:
         conn.close()
 
-    # Step 6: Schedule background task with final path
-    background_tasks.add_task(_process_run, run_id, final_path)
-    return {"run_id": run_id, "status": "pending"}
+    return {"run_id": run_id, "status": run["status"] if run else "failed"}
 
 
 @app.get("/runs")
@@ -423,6 +365,66 @@ def get_run_requirements(run_id: int) -> list[dict]:
         if run is None:
             raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
         return db.get_requirements_for_run(conn, run_id)
+    finally:
+        conn.close()
+
+
+class GenerateRequest(BaseModel):
+    requirement_ids: list[int]
+
+
+@app.post("/runs/{run_id}/requirements/generate")
+def generate_requirements(run_id: int, body: GenerateRequest, background_tasks: BackgroundTasks) -> dict:
+    """A human selected one or more requirements (a single row's Generate
+    button, or Select All + Generate) and wants the LLM to rewrite them.
+    Schedules _generate_selected() in the background -- an LLM call can
+    take anywhere from seconds to several minutes on CPU, so this returns
+    immediately and the client polls GET /runs/{run_id}/requirements,
+    watching each requested row's own "status" flip
+    analyzed -> generating -> generated/failed. Every other row in the run
+    is left completely untouched.
+    """
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        if not body.requirement_ids:
+            raise HTTPException(status_code=400, detail="requirement_ids must not be empty.")
+        for req_id in body.requirement_ids:
+            if db.get_requirement(conn, req_id) is None:
+                raise HTTPException(status_code=404, detail=f"No requirement with id {req_id}")
+    finally:
+        conn.close()
+
+    background_tasks.add_task(_generate_selected, run_id, body.requirement_ids)
+    return {"run_id": run_id, "status": "generating", "requirement_ids": body.requirement_ids}
+
+
+class EditRequest(BaseModel):
+    recommended_text: str
+
+
+@app.put("/runs/{run_id}/requirements/{requirement_id}")
+def edit_requirement(run_id: int, requirement_id: int, body: EditRequest) -> dict:
+    """A human typed a replacement requirement themselves instead of using
+    Generate -- no LLM involved, purely deterministic re-scoring
+    (db.apply_manual_edit), so this is synchronous and near-instant.
+    """
+    if not body.recommended_text.strip():
+        raise HTTPException(status_code=400, detail="recommended_text must not be empty.")
+
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        existing = db.get_requirement(conn, requirement_id)
+        if existing is None or existing["run_id"] != run_id:
+            raise HTTPException(
+                status_code=404, detail=f"No requirement with id {requirement_id} in run {run_id}"
+            )
+        return db.apply_manual_edit(conn, requirement_id, body.recommended_text.strip())
     finally:
         conn.close()
 
@@ -525,17 +527,25 @@ def reanalyze_consistency(run_id: int) -> dict:
         
         # Clear existing relationships
         db.clear_requirement_relationships(conn, run_id)
-        
+
         # Re-run consistency analysis
-        _run_consistency_analysis(conn, run_id)
-        
+        contradiction_check_skipped = _run_consistency_analysis(conn, run_id)
+
         # Return updated results
         relationships = db.get_requirement_relationships(conn, run_id)
         summary = db.get_consistency_summary(conn, run_id)
-        
+
+        message = (
+            "Consistency analysis completed, but contradiction detection was "
+            "skipped because the LLM endpoint is not reachable -- duplicate and "
+            "similarity results (no LLM needed) are still complete and accurate."
+            if contradiction_check_skipped
+            else "Consistency analysis completed"
+        )
         return {
             "run_id": run_id,
-            "message": "Consistency analysis completed",
+            "message": message,
+            "contradiction_check_skipped": contradiction_check_skipped,
             "summary": summary,
             "relationships_count": len(relationships),
         }

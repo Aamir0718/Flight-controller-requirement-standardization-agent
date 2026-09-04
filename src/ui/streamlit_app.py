@@ -485,25 +485,26 @@ def _friendly_error_summary(error_message: str | None) -> tuple[str, list[str]]:
         ]
 
     lower = error_message.lower()
-    model_name = SETTINGS["ollama"]["model"]
+    model_name = SETTINGS["llm"]["model"]
+    base_url = SETTINGS["llm"]["base_url"]
 
     if "not found" in lower or "404" in lower:
-        return f"The configured Ollama model '{model_name}' was not found locally.", [
-            f"Run `ollama pull {model_name}` in your PowerShell/Command terminal.",
-            "Ensure Ollama is running in the background (`ollama serve`).",
+        return f"The configured model '{model_name}' was not found on the LLM endpoint.", [
+            f"Confirm '{model_name}' exactly matches what {base_url}/models reports as served.",
+            f"Check that the vLLM server at {base_url} is reachable from this machine.",
             "Click 'Start new review' in the sidebar to reprocess your workbook.",
         ]
 
     if (
         "cuda" in lower
         or "llama-server" in lower
-        or "ollama" in lower
+        or "vllm" in lower
         or "responseerror" in lower
     ):
-        return "The local Ollama model failed while generating requirement candidates.", [
-            f"Restart Ollama (`ollama serve`) and confirm `{model_name}` can run locally.",
-            "If this machine has limited GPU memory, try running Ollama on CPU or configuring a smaller local model.",
-            "Reprocess the workbook after Ollama responds normally.",
+        return "The configured LLM endpoint failed while generating requirement candidates.", [
+            f"Confirm the vLLM server at {base_url} is running and reachable.",
+            f"Confirm llm.model ('{model_name}') in config/settings.yaml matches the served model name.",
+            "Reprocess the workbook after the endpoint responds normally.",
         ]
 
     if "failed to parse" in lower or "parse" in lower:
@@ -619,7 +620,7 @@ def _render_sidebar() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.markdown(f"**Ollama Model:** `{SETTINGS['ollama']['model']}`")
+        st.markdown(f"**Model:** `{SETTINGS['llm']['model']}`")
         st.markdown(f"**API Host:** `{API_BASE_URL}`")
 
         st.divider()
@@ -690,7 +691,7 @@ def _render_hero(api_ready: bool) -> None:
             {state_badge}
             <span class="fc-badge blue">.xlsx Workbooks</span>
             <span class="fc-badge green">Local SQLite Trace</span>
-            <span class="fc-badge amber">Ollama: {escape(SETTINGS["ollama"]["model"])}</span>
+            <span class="fc-badge amber">LLM: {escape(SETTINGS["llm"]["model"])}</span>
             <span class="fc-badge purple">INCOSE Rulebook v2.0</span>
           </div>
         </div>
@@ -928,7 +929,7 @@ def _render_metrics(requirements: list[dict[str, Any]], run: dict[str, Any]) -> 
     with c5:
         st.metric("Avg Confidence", f"{metrics['avg_confidence'] * 100:.0f}%", border=True)
     with c6:
-        st.metric("Model Status", f"{SETTINGS['ollama']['model']}", border=True)
+        st.metric("Model Status", f"{SETTINGS['llm']['model']}", border=True)
 
 
 def _render_review_queue(requirements: list[dict[str, Any]]) -> None:

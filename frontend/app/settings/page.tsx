@@ -27,7 +27,7 @@ export default function SettingsPage() {
         </div>
         <h1 className="text-2xl font-bold text-[#F5F7FA]">Platform Settings & Environment</h1>
         <p className="text-xs text-[#8FA3BF]">
-          Manage local loopback API connections, Ollama LLM parameters, and offline security rules.
+          Manage local loopback API connections, LLM endpoint parameters, and offline security rules.
         </p>
       </div>
 
@@ -59,12 +59,12 @@ export default function SettingsPage() {
         <div className="drdo-card p-6 space-y-4">
           <h2 className="text-sm font-bold text-[#F5F7FA] flex items-center gap-2 border-b border-[#243244] pb-3">
             <Cpu className="w-4 h-4 text-[#FFB300]" />
-            Ollama Model Configuration
+            LLM Endpoint Configuration
           </h2>
 
           <div className="space-y-2">
             <label className="text-xs font-semibold text-[#8FA3BF]">
-              Local Ollama Model Name
+              Configured Model Name
             </label>
             <div className="w-full bg-[#142036] border border-[#243244] rounded-xl px-4 py-2.5 text-xs font-mono text-[#F5F7FA]">
               {modelName}
@@ -79,7 +79,8 @@ export default function SettingsPage() {
         <div className="p-4 rounded-xl bg-[#00C853]/10 border border-[#00C853]/30 flex items-center gap-3 text-xs text-[#00C853]">
           <ShieldCheck className="w-5 h-5 flex-shrink-0" />
           <span>
-            Strict offline mode active. All requests remain isolated to local host machine loopback socket.
+            Analysis, editing, and export run entirely on this machine. Generate and contradiction
+            detection are the only actions that reach the DRDO-internal LLM endpoint over the network.
           </span>
         </div>
 

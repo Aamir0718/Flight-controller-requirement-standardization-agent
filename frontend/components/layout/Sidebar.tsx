@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   UploadCloud,
-  Cpu,
   FileCheck2,
   Columns3,
   BarChart3,
@@ -18,10 +17,16 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// No "Processing Status" nav entry: analysis now runs synchronously
+// inside POST /upload (see src/ui/api.py's module docstring), so there's
+// no separate processing phase left to show a status page for -- Upload
+// goes straight to Requirement Review. src/app/processing/ still exists
+// on disk but is unreachable from navigation; only LLM generation is ever
+// asynchronous now, and its live status is the per-row badge on the
+// Review page itself, not a separate page.
 const navItems = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Upload Workbook", href: "/upload", icon: UploadCloud },
-  { name: "Processing Status", href: "/processing", icon: Cpu },
   { name: "Requirement Review", href: "/review", icon: FileCheck2 },
   { name: "Comparison Matrix", href: "/compare", icon: Columns3 },
   { name: "Consistency Analysis", href: "/consistency", icon: GitBranch },
@@ -77,10 +82,11 @@ export function Sidebar() {
       <div className="p-4 m-3 rounded-xl bg-[#0F172A] border border-[#243244] space-y-2">
         <div className="flex items-center gap-2 text-xs font-semibold text-[#00C853]">
           <ShieldCheck className="w-4 h-4" />
-          <span>Air-Gapped Offline Mode</span>
+          <span>Local-First Analysis</span>
         </div>
         <p className="text-[11px] text-[#8FA3BF] leading-relaxed">
-          Local SQLite & Ollama loopback environment active. No external network data transmission.
+          Local SQLite storage. Analysis, editing, and export are fully local — only Generate and
+          contradiction detection reach the configured DRDO-internal LLM endpoint.
         </p>
       </div>
     </aside>

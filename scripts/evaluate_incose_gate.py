@@ -1,7 +1,7 @@
 """Precision/recall evaluation for src/pipeline/graph.py's pre-LLM INCOSE
-compliance gate (the IncoseCheck node) -- pure Python, no LLM, no network,
-no Ollama dependency, finishes in a fraction of a second even for hundreds
-of examples (the gate is a rule-by-rule regex/word-list/structural scorer,
+compliance gate (the IncoseCheck node) -- pure Python, no LLM endpoint
+dependency, finishes in a fraction of a second even for hundreds of
+examples (the gate is a rule-by-rule regex/word-list/structural scorer,
 same as everything else in src/rules/incose_scorer.py).
 
 Mirrors scripts/evaluate_compliance_gate.py's method exactly, but for the
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         f"({report['positive_examples_should_reject']} should-reject, "
         f"{report['negative_examples_should_pass']} should-pass) "
         f"at threshold {report['threshold']} "
-        f"in {report['elapsed_seconds']}s -- pure Python, no LLM, no Ollama needed"
+        f"in {report['elapsed_seconds']}s -- pure Python, no LLM endpoint needed"
     )
     print(f"Wrote {args.output}\n")
     print("Confusion matrix:")

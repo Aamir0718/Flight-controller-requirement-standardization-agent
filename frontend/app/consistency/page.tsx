@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { apiService } from "@/services/api";
 import { useActiveRun } from "@/context/ActiveRunContext";
 import { motion } from "framer-motion";
@@ -52,6 +53,12 @@ const getRelationshipBadge = (type: string) => {
 
 export default function ConsistencyPage() {
   const { activeRunId } = useActiveRun();
+  // Duplicate/similarity detection is pure embeddings and never needs the
+  // LLM; contradiction detection does. If the LLM endpoint isn't
+  // reachable, the backend still returns valid duplicate/similar results
+  // and just skips contradiction checking -- this banner is how that gets
+  // surfaced, instead of it silently under-reporting contradictions.
+  const [lastMessage, setLastMessage] = useState<{ text: string; isWarning: boolean } | null>(null);
 
   const {
     data: consistencyData,
@@ -68,11 +75,15 @@ export default function ConsistencyPage() {
   const handleReanalyze = async () => {
     if (!activeRunId) return;
     try {
-      await apiService.reanalyzeConsistency(activeRunId);
+      const result = await apiService.reanalyzeConsistency(activeRunId);
+      setLastMessage({ text: result.message, isWarning: result.contradiction_check_skipped });
       refetch();
     } catch (error: any) {
       console.error("Failed to reanalyze consistency:", error);
-      alert(error.message || "Failed to reanalyze consistency. Please try again.");
+      setLastMessage({
+        text: error.message || "Failed to reanalyze consistency. Please try again.",
+        isWarning: true,
+      });
     }
   };
 
@@ -175,6 +186,23 @@ export default function ConsistencyPage() {
           <span>Re-analyze</span>
         </button>
       </motion.div>
+
+      {lastMessage && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+            lastMessage.isWarning
+              ? "bg-[#FFB300]/10 border-[#FFB300]/30 text-[#FFB300]"
+              : "bg-[#00C853]/10 border-[#00C853]/30 text-[#00C853]"
+          }`}
+        >
+          {lastMessage.isWarning ? (
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          )}
+          <p className="leading-relaxed">{lastMessage.text}</p>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <motion.div

@@ -17,7 +17,7 @@ prompt selection -- and reports:
   but a signal worth looking at if the rate is high
 - every failure case: any example where something above didn't hold
 
-Requires a reachable local Ollama instance (config/settings.yaml) --
+Requires a reachable LLM endpoint (config/settings.yaml) --
 fails fast with a clear message and writes no output file if it isn't,
 rather than saving a partial/misleading report. Never calls any
 external/hosted API (see src/llm/local_llm_client.py).
@@ -37,7 +37,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from llm.local_llm_client import LocalLLMClient, OllamaUnavailableError  # noqa: E402
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError  # noqa: E402
 from pipeline.graph import build_graph, run_requirement  # noqa: E402
 from rules.detectors import run_all_detectors  # noqa: E402
 from rules.ears_classifier import classify_ears_pattern  # noqa: E402
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     client = LocalLLMClient()
     try:
         client.check_reachable()
-    except OllamaUnavailableError as exc:
+    except LLMUnavailableError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

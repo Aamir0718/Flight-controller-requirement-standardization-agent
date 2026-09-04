@@ -47,9 +47,14 @@ export default function UploadPage() {
     setError(null);
 
     try {
+      // Analysis (EARS + INCOSE + violations, no LLM) now runs
+      // synchronously inside POST /upload itself -- by the time this
+      // resolves, the whole workbook's analysis table is already sitting
+      // in the run, so there's nothing to poll a "processing" page for.
+      // Straight to the workspace where a human picks what to Generate.
       const response = await apiService.uploadWorkbook(file);
       setActiveRunId(response.run_id);
-      router.push("/processing");
+      router.push("/review");
     } catch (err: any) {
       setError(err.message || "Upload failed. Please ensure the backend is running.");
       setIsUploading(false);

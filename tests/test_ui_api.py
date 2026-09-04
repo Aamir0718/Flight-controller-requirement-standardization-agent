@@ -1,11 +1,15 @@
 """Tests for src/ui/api.py, using FastAPI's TestClient with a fake LLM
-client (no real Ollama needed) and a throwaway per-test SQLite database
+client (no real LLM endpoint needed) and a throwaway per-test SQLite database
 and upload/export directory -- never touches the real data/app.db.
 
-FastAPI's TestClient runs BackgroundTasks synchronously as part of the
-request/response cycle (confirmed empirically), so `POST /upload` has
-already finished processing by the time the test client gets its
-response back -- no polling loop needed in these tests.
+POST /upload is now purely deterministic (analyze_requirement() for every
+row, no LLM at all) and runs synchronously in the request itself -- no
+LocalLLMClient involved, no background task, nothing to poll. Only POST
+/runs/{run_id}/requirements/generate touches an LLM client, via a
+background task; FastAPI's TestClient runs BackgroundTasks synchronously
+as part of the request/response cycle (confirmed empirically), so that
+endpoint has also already finished by the time the test client gets its
+response back -- no polling loop needed in these tests either.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from openpyxl import Workbook, load_workbook
 import storage.db as db_module
 import ui.api as api
 
-from llm.local_llm_client import LLMResult, OllamaUnavailableError
+from llm.local_llm_client import LLMResult, LLMUnavailableError
 
 _REAL_CONNECT = db_module.connect
 
@@ -40,7 +44,7 @@ class _FakeWorkingClient:
 
 class _FakeUnreachableClient:
     def check_reachable(self):
-        raise OllamaUnavailableError("simulated: Ollama not reachable")
+        raise LLMUnavailableError("simulated: LLM endpoint not reachable")
 
 
 class _FakeCrashesMidGenerationClient:
@@ -97,108 +101,22 @@ def test_health(api_env):
 
 
 # ---------------------------------------------------------------------------
-# _describe_stage -- the human-readable console line src/ui/progress.py
-# streams to the frontend's Execution console for each pipeline node.
-# ---------------------------------------------------------------------------
-
-
-class TestDescribeStage:
-    # ComplianceCheck (EARS) now runs FIRST, before IncoseCheck -- see
-    # src/pipeline/graph.py's module docstring for why (structural
-    # validity is a precondition for the INCOSE content checks to mean
-    # anything). So ComplianceCheck's message carries no timing/LLM-start
-    # wording (IncoseCheck is now the last deterministic gate, not this
-    # one), and IncoseCheck's message is the one that reports the total
-    # deterministic elapsed time and announces the LLM call.
-
-    def test_compliance_check_pass_has_no_timing_or_llm_wording(self):
-        message = api._describe_stage("ComplianceCheck", {"ears_compliant": True})
-        assert "passed" in message
-        assert "INCOSE" in message  # says what runs next, not "starting LLM"
-        assert "LLM" not in message
-
-    def test_compliance_check_failure_includes_reason(self):
-        message = api._describe_stage(
-            "ComplianceCheck",
-            {"ears_compliant": False, "rejection_reason": "Uses 'should' instead of 'shall'"},
-        )
-        assert "FAILED" in message
-        assert "Uses 'should' instead of 'shall'" in message
-
-    def test_incose_check_pass_names_the_score(self):
-        message = api._describe_stage(
-            "IncoseCheck", {"incose_compliant": True, "incose_gate_score": 96.4}
-        )
-        assert "passed" in message
-        assert "96.4" in message
-
-    def test_incose_check_failure_includes_the_full_rejection_reason(self):
-        reason = "INCOSE score 72.0/100 (threshold 80.0) -- R7 (Vague Terms): ..."
-        message = api._describe_stage(
-            "IncoseCheck",
-            {"incose_compliant": False, "incose_gate_score": 72.0, "rejection_reason": reason},
-        )
-        assert "FAILED" in message
-        assert reason in message
-        assert "without" in message  # makes clear the LLM was never called
-
-    def test_incose_check_pass_reports_deterministic_timing(self):
-        message = api._describe_stage(
-            "IncoseCheck",
-            {
-                "incose_compliant": True,
-                "incose_gate_score": 100.0,
-                "deterministic_elapsed_ms": 0.62,
-            },
-        )
-        assert "0.62 ms" in message
-        assert "LLM" in message
-
-    def test_incose_check_failure_includes_reason_and_timing(self):
-        message = api._describe_stage(
-            "IncoseCheck",
-            {
-                "incose_compliant": False,
-                "incose_gate_score": 72.0,
-                "deterministic_elapsed_ms": 1.4,
-                "rejection_reason": "R7 (Vague Terms): ...",
-            },
-        )
-        assert "FAILED" in message
-        assert "1.40 ms" in message
-        assert "R7 (Vague Terms): ..." in message
-
-    def test_generate_candidates_reports_llm_elapsed_seconds(self):
-        message = api._describe_stage(
-            "GenerateCandidates", {"candidates_raw": [1, 2, 3], "llm_elapsed_ms": 42300}
-        )
-        assert "3 candidate" in message
-        assert "42.3s" in message
-
-    def test_reject_non_ears_shows_the_full_reason_from_the_result(self):
-        message = api._describe_stage(
-            "RejectNonEars",
-            {"result": {"ears_pattern": {"reason": "Rejected -- not INCOSE compliant: ..."}}},
-        )
-        assert "REJECTED" in message
-        assert "not INCOSE compliant" in message
-
-
-# ---------------------------------------------------------------------------
-# /upload
+# /upload -- purely deterministic now (analyze_requirement() for every
+# row, no LLM), so none of these need a LocalLLMClient at all.
 # ---------------------------------------------------------------------------
 
 
 class TestUpload:
-    def test_rejects_non_xlsx_files(self, api_env, monkeypatch):
+    def test_rejects_non_xlsx_files(self, api_env):
         client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
         response = client.post("/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
         assert response.status_code == 400
 
-    def test_happy_path_processes_and_completes(self, api_env, monkeypatch):
+    def test_happy_path_analyzes_and_completes_with_no_llm_involved(self, api_env, monkeypatch):
         client, tmp_path = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
+        # If /upload tried to touch an LLM client at all, this would raise --
+        # confirms analysis really is LLM-free, not just "didn't happen to fail".
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeUnreachableClient)
 
         response = _upload(client)
         assert response.status_code == 200
@@ -212,40 +130,15 @@ class TestUpload:
         assert run["error_message"] is None
         assert run["file_name"] == "sample.xlsx"
 
-    def test_uploaded_file_bytes_are_persisted(self, api_env, monkeypatch):
+    def test_uploaded_file_bytes_are_persisted(self, api_env):
         client, tmp_path = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
         _upload(client)
         saved_files = list((tmp_path / "uploads").glob("*sample.xlsx"))
         assert len(saved_files) == 1
         assert saved_files[0].stat().st_size > 0
 
-    def test_ollama_unreachable_marks_run_failed(self, api_env, monkeypatch):
+    def test_corrupt_workbook_marks_run_failed_with_friendly_code(self, api_env):
         client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeUnreachableClient)
-
-        run_id = _upload(client).json()["run_id"]
-        run = client.get(f"/runs/{run_id}").json()
-
-        assert run["status"] == "failed"
-        assert "OllamaUnavailableError" in run["error_message"]
-
-    def test_llm_crash_marks_run_failed_with_reason(self, api_env, monkeypatch):
-        client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeCrashesMidGenerationClient)
-
-        run_id = _upload(client).json()["run_id"]
-        run = client.get(f"/runs/{run_id}").json()
-
-        assert run["status"] == "failed"
-        assert "RuntimeError" in run["error_message"]
-        # total_requirements was set (parsing succeeded) even though generation failed
-        assert run["total_requirements"] == 2
-
-    def test_corrupt_workbook_marks_run_failed_with_friendly_code(self, api_env, monkeypatch):
-        client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
-
         corrupt_bytes = (Path(__file__).resolve().parent / "fixtures" / "corrupt_file.xlsx").read_bytes()
         run_id = _upload(client, filename="corrupt_file.xlsx", content=corrupt_bytes).json()["run_id"]
         run = client.get(f"/runs/{run_id}").json()
@@ -257,14 +150,142 @@ class TestUpload:
 
 
 # ---------------------------------------------------------------------------
+# POST /runs/{run_id}/requirements/generate -- the only endpoint that ever
+# touches an LLM client, and only for the ids a human selected.
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateRequirements:
+    def test_happy_path_generates_only_the_selected_requirement(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
+        run_id = _upload(client).json()["run_id"]
+        requirements = client.get(f"/runs/{run_id}/requirements").json()
+        target_id, other_id = requirements[0]["id"], requirements[1]["id"]
+
+        response = client.post(
+            f"/runs/{run_id}/requirements/generate", json={"requirement_ids": [target_id]}
+        )
+        assert response.status_code == 200
+
+        updated = {r["id"]: r for r in client.get(f"/runs/{run_id}/requirements").json()}
+        assert updated[target_id]["status"] == "generated"
+        assert len(updated[target_id]["candidates"]) == 3
+        # the other requirement was never touched
+        assert updated[other_id]["status"] == "analyzed"
+        assert updated[other_id]["candidates"] == []
+
+    def test_select_all_generates_every_requirement(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
+        run_id = _upload(client).json()["run_id"]
+        ids = [r["id"] for r in client.get(f"/runs/{run_id}/requirements").json()]
+
+        client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": ids})
+
+        for req in client.get(f"/runs/{run_id}/requirements").json():
+            assert req["status"] == "generated"
+            assert len(req["candidates"]) == 3
+
+    def test_llm_unreachable_marks_selected_requirements_failed(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeUnreachableClient)
+        run_id = _upload(client).json()["run_id"]
+        ids = [r["id"] for r in client.get(f"/runs/{run_id}/requirements").json()]
+
+        client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": ids})
+
+        for req in client.get(f"/runs/{run_id}/requirements").json():
+            assert req["status"] == "failed"
+            assert req["error_message"] == api.AI_SERVICE_UNAVAILABLE
+
+    def test_llm_crash_marks_that_requirement_failed_with_reason(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeCrashesMidGenerationClient)
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+
+        client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": [target_id]})
+
+        req = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert req["status"] == "failed"
+        assert req["error_message"] is not None
+
+    def test_unknown_run_id_returns_404(self, api_env):
+        client, _ = api_env
+        response = client.post("/runs/999/requirements/generate", json={"requirement_ids": [1]})
+        assert response.status_code == 404
+
+    def test_unknown_requirement_id_returns_404(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
+        run_id = _upload(client).json()["run_id"]
+        response = client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": [999999]})
+        assert response.status_code == 404
+
+    def test_empty_selection_returns_400(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        response = client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": []})
+        assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# PUT /runs/{run_id}/requirements/{requirement_id} -- manual edit, no LLM.
+# ---------------------------------------------------------------------------
+
+
+class TestEditRequirement:
+    def test_happy_path_updates_text_and_rescopes_deterministically(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+        new_text = "When the fuel level drops below reserve, the system shall alert the pilot."
+
+        response = client.put(
+            f"/runs/{run_id}/requirements/{target_id}", json={"recommended_text": new_text}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "edited"
+        assert body["recommended_text"] == new_text
+        assert body["recommended_index"] == -1
+        assert body["needs_human_review"] is False
+        assert body["candidates"] == []  # no LLM was ever involved
+
+    def test_empty_text_returns_400(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+        response = client.put(f"/runs/{run_id}/requirements/{target_id}", json={"recommended_text": "   "})
+        assert response.status_code == 400
+
+    def test_unknown_requirement_id_returns_404(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        response = client.put(f"/runs/{run_id}/requirements/999999", json={"recommended_text": "x shall y."})
+        assert response.status_code == 404
+
+    def test_requirement_from_a_different_run_returns_404(self, api_env):
+        client, _ = api_env
+        run_1 = _upload(client).json()["run_id"]
+        run_2 = _upload(client).json()["run_id"]
+        req_from_run_1 = client.get(f"/runs/{run_1}/requirements").json()[0]["id"]
+
+        response = client.put(
+            f"/runs/{run_2}/requirements/{req_from_run_1}", json={"recommended_text": "x shall y."}
+        )
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # /runs, /runs/{id}, /runs/{id}/requirements
 # ---------------------------------------------------------------------------
 
 
 class TestRunsEndpoints:
-    def test_list_runs_includes_uploaded_run(self, api_env, monkeypatch):
+    def test_list_runs_includes_uploaded_run(self, api_env):
         client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
         run_id = _upload(client).json()["run_id"]
 
         runs = client.get("/runs").json()
@@ -276,18 +297,20 @@ class TestRunsEndpoints:
         assert client.get("/runs/999/requirements").status_code == 404
         assert client.get("/runs/999/download").status_code == 404
 
-    def test_requirements_endpoint_returns_full_pipeline_trace(self, api_env, monkeypatch):
+    def test_requirements_endpoint_returns_the_analysis_trace_with_no_candidates_yet(self, api_env):
         client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
         run_id = _upload(client).json()["run_id"]
 
         requirements = client.get(f"/runs/{run_id}/requirements").json()
         assert len(requirements) == 2
         for req in requirements:
             assert req["original_text"]
-            assert len(req["candidates"]) == 3
-            assert "recommended_index" in req
-            assert "needs_human_review" in req
+            assert req["status"] == "analyzed"
+            assert req["candidates"] == []  # nothing generated until a human asks
+            assert req["recommended_index"] == -1
+            assert "recommended_score" in req  # the real INCOSE score is there already
+            assert "violations" in req
+            assert req["needs_human_review"] is True  # nothing resolved yet
             assert "vague_term_suggestions" in req
 
 
@@ -306,9 +329,10 @@ class TestDownload:
         response = client.get(f"/runs/{run_id}/download")
         assert response.status_code == 409
 
-    def test_download_returns_a_valid_workbook(self, api_env, monkeypatch):
+    def test_download_returns_a_valid_workbook_right_after_upload_before_any_generation(self, api_env):
+        # The point of the two-phase split: export must work as soon as
+        # analysis is done, with no LLM call and nothing generated yet.
         client, _ = api_env
-        monkeypatch.setattr(api, "LocalLLMClient", _FakeWorkingClient)
         run_id = _upload(client).json()["run_id"]
 
         response = client.get(f"/runs/{run_id}/download")

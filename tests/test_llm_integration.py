@@ -1,15 +1,13 @@
 """Integration test for the LLM stack (local_llm_client.py + prompts.py)
-against a real, locally-running Ollama instance.
+against the real, configured LLM endpoint (config/settings.yaml's
+llm.base_url -- a DRDO-internal vLLM server).
 
 This is the only test file in the suite allowed to make a network call,
-and only ever to the localhost Ollama instance configured in
-config/settings.yaml. It auto-skips (does not fail the build/CI run) when
-Ollama isn't reachable -- per the project's fully-offline requirement,
-there is no fallback to a hosted API to test against instead.
+and only ever to that one configured endpoint. It auto-skips (does not
+fail the build/CI run) when the endpoint isn't reachable -- there is no
+fallback to any other endpoint to test against instead.
 
-Run with Ollama up to actually exercise this:
-    ollama serve &
-    ollama pull <model from config/settings.yaml>
+Run with the endpoint reachable to actually exercise this:
     pytest tests/test_llm_integration.py -v
 """
 
@@ -20,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from llm.local_llm_client import LLMResult, LocalLLMClient, OllamaUnavailableError
+from llm.local_llm_client import LLMResult, LocalLLMClient, LLMUnavailableError
 from llm.prompts import build_prompt
 from rules.detectors import run_all_detectors
 
@@ -50,8 +48,8 @@ def llm_client() -> LocalLLMClient:
     client = LocalLLMClient()
     try:
         client.check_reachable()
-    except OllamaUnavailableError as exc:
-        pytest.skip(f"Ollama not reachable -- skipping integration test ({exc})")
+    except LLMUnavailableError as exc:
+        pytest.skip(f"LLM endpoint not reachable -- skipping integration test ({exc})")
     return client
 
 

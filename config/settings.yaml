@@ -2,14 +2,29 @@
 # Nothing model-specific or environment-specific should be hardcoded
 # in application code — read it from here via src/config.py instead.
 
-ollama:
-  host: "localhost"
-  port: 11434
-  model: gemma3:4b          # config value only, never hardcoded elsewhere
-  # Raised from 120s: this machine has no GPU, so Ollama runs gemma3:4b on
-  # CPU only (~2-3s/token) -- a real requirement's full system+few-shot
-  # prompt takes far longer to evaluate than 120s allows, which was
-  # producing ReadTimeout failures rather than genuine errors.
+# OpenAI-compatible chat completions endpoint (vLLM) -- this project no
+# longer runs a local Ollama instance; src/llm/local_llm_client.py talks
+# plain OpenAI-format JSON to base_url over HTTP via httpx (POST
+# {base_url}/chat/completions, GET {base_url}/models). The rest of the
+# app (EARS/INCOSE analysis, manual edit, Excel export -- everything
+# except the Generate button and consistency's contradiction check) never
+# depends on this and keeps working even when this endpoint is down.
+llm:
+  # DRDO-internal vLLM server. VERIFY before relying on this: an IPv4
+  # address needs 4 dot-separated numbers and this one only has 3 --
+  # confirm the exact address (e.g. `curl http://<address>/v1/models`
+  # from this machine) rather than trusting it as typed here.
+  base_url: "http://80.0.24:8001/v1"
+  # Must exactly match the model name the vLLM server reports at
+  # GET {base_url}/models -- verify with the curl command above rather
+  # than assuming this string is exactly right.
+  model: "gemma4:26B"
+  # Empty = no Authorization header sent at all. Set this only if the
+  # server starts requiring a bearer token.
+  api_key: ""
+  # This server may be under load from other users -- a large model over
+  # a network hop can be slower than a dedicated local GPU. Raise further
+  # if requests are timing out rather than genuinely failing.
   request_timeout_seconds: 900
   temperature: 0.2
 
@@ -49,7 +64,9 @@ consistency:
   # Sentence transformer model for embeddings (offline, local)
   # Falls back to TF-IDF if sentence-transformers is unavailable
   embedding_model: "all-MiniLM-L6-v2"
-  # Enable LLM-based contradiction detection (requires Ollama)
+  # Enable LLM-based contradiction detection (requires the llm.base_url
+  # endpoint above; skipped gracefully, not a failure, if it's unreachable
+  # -- see ConsistencyResult.contradiction_check_skipped)
   enable_contradiction_check: true
 
 ui:

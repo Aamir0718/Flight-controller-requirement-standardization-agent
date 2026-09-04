@@ -35,6 +35,13 @@ export interface VagueTermSuggestion {
   suggestion: string;
 }
 
+// A row's lifecycle: "analyzed" right after upload (deterministic only,
+// no LLM yet) -> a human clicks Generate ("generating" while the LLM call
+// is in flight, then "generated", or "failed" if the call errored) or
+// types a replacement themselves ("edited", no LLM involved). Never moves
+// backwards automatically -- see src/storage/db.py's REQUIREMENT_STATUSES.
+export type RequirementStatus = "analyzed" | "generating" | "generated" | "edited" | "failed";
+
 export interface Requirement {
   id?: number | string;
   sequence_in_run: number;
@@ -49,6 +56,9 @@ export interface Requirement {
   needs_human_review: boolean;
   compliance_threshold?: number;
   vague_term_suggestions: VagueTermSuggestion[];
+  status: RequirementStatus;
+  violations: FailedRule[];
+  error_message?: string | null;
 }
 
 export interface Run {

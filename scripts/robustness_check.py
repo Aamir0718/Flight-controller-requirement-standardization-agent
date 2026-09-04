@@ -19,7 +19,7 @@ Confirms two things for every case, never assumed, always checked:
    or a clear needs_human_review flag -- never a silent failure
    (empty/garbage output presented with false confidence).
 
-Requires a reachable local Ollama instance -- fails fast with a clear
+Requires a reachable LLM endpoint -- fails fast with a clear
 message and writes no output file if it isn't, same as
 scripts/evaluate.py. Never calls any external/hosted API.
 
@@ -37,7 +37,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from llm.local_llm_client import LocalLLMClient, OllamaUnavailableError  # noqa: E402
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError  # noqa: E402
 from pipeline.graph import build_graph, run_requirement  # noqa: E402
 
 GOLDEN_DIR = REPO_ROOT / "data" / "golden"
@@ -224,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     client = LocalLLMClient()
     try:
         client.check_reachable()
-    except OllamaUnavailableError as exc:
+    except LLMUnavailableError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

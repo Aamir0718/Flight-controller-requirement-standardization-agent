@@ -1,9 +1,9 @@
 """Tests for scripts/robustness_check.py's logic, driven by fake LLM
-clients -- no real Ollama needed. Verifies the crash/silent-failure
+clients -- no real LLM endpoint needed. Verifies the crash/silent-failure
 detection is correct, and that the 18 hand-written cases (including the
 malformed/edge ones) survive the real pipeline machinery when the LLM
 itself behaves reasonably -- the one thing this suite can't do in an
-environment without a running Ollama instance is judge real model output
+environment without a reachable LLM endpoint is judge real model output
 quality, which is exactly what scripts/robustness_check.py is for when
 run for real.
 """
@@ -18,7 +18,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 import robustness_check as rc  # noqa: E402
 
-from llm.local_llm_client import LLMResult, OllamaUnavailableError  # noqa: E402
+from llm.local_llm_client import LLMResult, LLMUnavailableError  # noqa: E402
 from pipeline.graph import build_graph  # noqa: E402
 
 
@@ -263,7 +263,7 @@ class TestMain:
     def test_fails_fast_and_writes_nothing_when_ollama_unreachable(self, tmp_path, monkeypatch):
         class _Unavailable:
             def check_reachable(self):
-                raise OllamaUnavailableError("simulated")
+                raise LLMUnavailableError("simulated")
 
         monkeypatch.setattr(rc, "LocalLLMClient", _Unavailable)
         output_path = tmp_path / "robustness_results.json"

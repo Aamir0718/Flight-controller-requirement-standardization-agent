@@ -36,7 +36,7 @@ export function TopNav() {
 
       {/* Status Bar Indicators */}
       <div className="flex items-center gap-4">
-        {/* Ollama Model Indicator */}
+        {/* LLM Model Indicator */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] text-xs">
           <Sparkles className="w-3.5 h-3.5 text-[#FFB300]" />
           <span className="text-[#8FA3BF]">Model:</span>

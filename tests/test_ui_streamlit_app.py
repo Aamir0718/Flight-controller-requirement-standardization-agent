@@ -208,7 +208,7 @@ class TestAppRendering:
     def test_failed_run_shows_error_with_reason(self):
         runs = {7: {"id": 7, "file_name": "bad.xlsx", "status": "failed",
                     "requirement_count": 0, "total_requirements": 3,
-                    "error_message": "OllamaUnavailableError: simulated"}}
+                    "error_message": "LLMUnavailableError: simulated"}}
         fake_get = _fake_get_factory(runs_by_id=runs, requirements_by_run_id={})
 
         with patch("requests.get", side_effect=fake_get):
@@ -217,7 +217,7 @@ class TestAppRendering:
             at.run()
 
         assert not at.exception
-        assert any("OllamaUnavailableError" in e.value for e in at.error)
+        assert any("LLMUnavailableError" in e.value for e in at.error)
 
     def test_unknown_run_id_shows_not_found(self):
         fake_get = _fake_get_factory(runs_by_id={}, requirements_by_run_id={})

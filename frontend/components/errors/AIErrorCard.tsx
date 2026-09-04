@@ -18,6 +18,17 @@ export function isAIError(errorMessage?: string | null): boolean {
   return AI_ERROR_CODES.includes(errorMessage as AIErrorCode);
 }
 
+/** Maps a backend error code (e.g. "AI_SERVICE_UNAVAILABLE") to a short,
+ * human-readable message -- for compact inline use (a per-row badge/note)
+ * where the full AIErrorCard below would be too heavy. Falls back to the
+ * raw code itself for anything not in ERROR_CONFIG, so an unrecognized
+ * code is still visible rather than silently swallowed. */
+export function describeAIError(errorCode?: string | null): string {
+  if (!errorCode) return "Unknown error.";
+  const config = errorCode in ERROR_CONFIG ? ERROR_CONFIG[errorCode as AIErrorCode] : null;
+  return config ? config.description : errorCode;
+}
+
 interface AIErrorCardProps {
   errorCode?: string | null;
   technicalDetails?: string | null;
@@ -28,22 +39,22 @@ const ERROR_CONFIG: Record<AIErrorCode, { title: string; icon: typeof AlertTrian
   AI_SERVICE_UNAVAILABLE: {
     title: "AI Service Unavailable",
     icon: AlertCircle,
-    description: "The local AI service (Ollama) is not running or cannot be reached.",
+    description: "The configured LLM endpoint is not running or cannot be reached.",
   },
   AI_RESPONSE_VALIDATION_FAILED: {
     title: "AI Response Validation Failed",
     icon: AlertTriangle,
-    description: "The local AI model returned an invalid response format while processing requirements.",
+    description: "The LLM returned an invalid response format while processing requirements.",
   },
   AI_REQUEST_TIMEOUT: {
     title: "AI Request Timeout",
     icon: Clock,
-    description: "The AI service took too long to respond to the request.",
+    description: "The LLM endpoint took too long to respond to the request.",
   },
   AI_MODEL_NOT_FOUND: {
     title: "AI Model Not Found",
     icon: Cpu,
-    description: "The configured AI model is not available in the local Ollama service.",
+    description: "The configured model name is not available on the LLM endpoint.",
   },
   AI_UNKNOWN_ERROR: {
     title: "AI Processing Error",

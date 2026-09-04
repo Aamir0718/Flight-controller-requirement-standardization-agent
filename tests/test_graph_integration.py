@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from llm.local_llm_client import LocalLLMClient, OllamaUnavailableError
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError
 from pipeline.graph import build_graph, run_requirement
 
 GOLDEN_DIR = Path(__file__).resolve().parent.parent / "data" / "golden"
@@ -73,7 +73,7 @@ def compiled_graph():
     client = LocalLLMClient()
     try:
         client.check_reachable()
-    except OllamaUnavailableError as exc:
+    except LLMUnavailableError as exc:
         pytest.skip(f"Ollama not reachable -- skipping graph integration test ({exc})")
     return build_graph(client=client)
 
