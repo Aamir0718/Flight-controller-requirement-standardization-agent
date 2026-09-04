@@ -5,7 +5,7 @@
 
 Two deterministic gates now stand between parsing and the LLM --
 ComplianceCheck (EARS), then IncoseCheck -- and a requirement must clear
-BOTH, in that order, before an Ollama call is ever made. Failing either one
+BOTH, in that order, before an LLM endpoint call is ever made. Failing either one
 rejects immediately and routes straight to RejectNonEars; the other gate
 never runs. EARS runs first deliberately: structural validity (is this
 even a "shall" statement?) is a precondition for the INCOSE content
@@ -45,7 +45,7 @@ the measured evidence.
   confidently match a recognized EARS template (UNCLEAR_LABEL), the
   requirement is rejected outright, routed straight to RejectNonEars and
   never reaching IncoseCheck or GenerateCandidates, instead of spending an
-  Ollama call (or a meaningless INCOSE score) on text that isn't
+  LLM endpoint call (or a meaningless INCOSE score) on text that isn't
   structured as EARS to begin with. Runs BEFORE IncoseCheck: measured
   proof this order matters -- every one of the 25 hand-crafted
   garbage/malformed examples in data/golden/compliance_gate_negatives.json
@@ -76,20 +76,20 @@ the measured evidence.
   elapsed time (state["deterministic_elapsed_ms"]) is measured, since it's
   the last node before GenerateCandidates on the pass branch.
 - GenerateCandidates: src/llm/local_llm_client.py + src/pipeline/
-  candidate_generator.py -- the only node that talks to Ollama, and the
+  candidate_generator.py -- the only node that talks to the LLM endpoint, and the
   only slow one: everything above runs in low single-digit milliseconds
   (pure regex/word-list/structural checks), while this node is a real
-  network call to a local model that can take anywhere from seconds to
-  several minutes depending on hardware (see config/settings.yaml's
-  ollama.request_timeout_seconds comment -- CPU-only inference is far
-  slower than GPU). Measures its own elapsed time
+  network call to the configured vLLM endpoint (config/settings.yaml's
+  llm.base_url) that can take anywhere from seconds to minutes depending
+  on server load -- see llm.request_timeout_seconds. Measures its own
+  elapsed time
   (state["llm_elapsed_ms"]) so the console can show that contrast
   explicitly rather than leaving it to be inferred from timestamps. The
   RuleFlag flags and ClassifyPattern's guess both feed into the prompt
   (src/llm/prompts.py, via candidate_generator -> build_prompt). Generates
   all 3 candidates concurrently (threads) rather than one call at a time --
-  each is an independent, blocking HTTP call to Ollama, so this is a real
-  speedup whenever Ollama can service more than one request at a time.
+  each is an independent, blocking HTTP call to the LLM endpoint, so this is a real
+  speedup whenever the LLM endpoint can service more than one request at a time.
 - ScoreAndRecommend: src/pipeline/recommender.py -- deterministic INCOSE
   scoring of all 3 candidates (the full rulebook, R1/R37/R38 included --
   this is judging the LLM's rewrite quality, not re-running IncoseCheck's
@@ -112,7 +112,7 @@ the measured evidence.
   failed and why, for an IncoseCheck rejection -- is carried in the
   result's existing ears_pattern.reason field.
 
-Only GenerateCandidates requires a reachable Ollama instance; every other
+Only GenerateCandidates requires a reachable LLM endpoint; every other
 node is pure/offline, so build_graph() itself never touches the network --
 only invoking a compiled graph through GenerateCandidates does.
 """
@@ -454,7 +454,7 @@ def _make_reject_node(compliance_threshold: float):
 
 
 # ---------------------------------------------------------------------------
-# Node: GenerateCandidates (the only node that talks to Ollama)
+# Node: GenerateCandidates (the only node that talks to the LLM endpoint)
 # ---------------------------------------------------------------------------
 
 
@@ -557,7 +557,7 @@ def analyze_requirement(
       - "gate_passed": whether this requirement would clear BOTH pre-LLM
         gates (ComplianceCheck then IncoseCheck) -- informational only,
         shown to the human, never used to block generate_requirement()
-        below. Gating which requirements are worth an unattended Ollama
+        below. Gating which requirements are worth an unattended LLM
         call made sense when the whole workbook ran through the LLM
         automatically; it doesn't block anything now that a human clicks
         Generate one row (or one selection) at a time.
@@ -690,7 +690,7 @@ def build_graph(
     settings: dict[str, Any] | None = None,
 ):
     """Builds and compiles the pipeline graph. Never touches the network by
-    itself -- constructing a LocalLLMClient doesn't connect to Ollama, only
+    itself -- constructing a LocalLLMClient doesn't connect to the LLM endpoint, only
     invoking the compiled graph through GenerateCandidates does.
 
     ``client`` defaults to a real LocalLLMClient built from

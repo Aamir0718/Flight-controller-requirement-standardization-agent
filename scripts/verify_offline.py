@@ -1,27 +1,30 @@
-"""Verifies the pipeline runs fully offline: builds a small sample
-requirement sheet, installs a network guard that raises loudly on any
-attempted connection to a non-loopback address, and runs the full
-pipeline (src/pipeline/graph.py: Parse -> RuleFlag -> ClassifyPattern ->
-GenerateCandidates -> ScoreAndRecommend -> Finalize) plus a storage
-round-trip (src/storage/db.py: save + Excel export) against it.
+"""Verifies the pipeline makes network connections ONLY to loopback or the
+one configured LLM endpoint host (config/settings.yaml's llm.base_url) --
+builds a small sample requirement sheet, installs a network guard that
+raises loudly on any attempted connection to any OTHER address, and runs
+the full pipeline (src/pipeline/graph.py: Parse -> RuleFlag ->
+ClassifyPattern -> GenerateCandidates -> ScoreAndRecommend -> Finalize)
+plus a storage round-trip (src/storage/db.py: save + Excel export)
+against it.
 
-The one connection this project is allowed to make is to a locally-running
-Ollama instance (README.md: "the only network call is to a locally-running
-Ollama instance"). The guard therefore blocks everything EXCEPT loopback
-(127.0.0.1 / ::1 / "localhost") connections, so a real, successful run
-against Ollama on localhost still passes -- what fails loudly is any
-connection this codebase (or one of its dependencies) attempts to a
-non-loopback address, which would mean something is silently reaching
-outside the machine.
+This project is no longer air-gapped in the strict "loopback only" sense
+-- config/settings.yaml's llm.base_url points at a DRDO-internal vLLM
+server, a genuine non-loopback network address, and that is intentional
+(see src/llm/local_llm_client.py's module docstring). What this guard
+still verifies is the thing that actually matters: nothing in this
+codebase or its dependencies silently reaches out to any host OTHER than
+that one configured, known endpoint -- no public internet call, no
+unexpected third-party service, nothing beyond the single destination
+this project is explicitly configured to trust.
 
 IMPORTANT -- what this script can and cannot prove
 ----------------------------------------------------
 This is an automated, in-process, CI-friendly smoke check. Monkeypatching
 socket.socket.connect()/connect_ex()/socket.create_connection() in the
 current Python process catches every connection routed through Python's
-own socket layer -- which is how httpx (and therefore the Ollama client),
+own socket layer -- which is how httpx (and therefore LocalLLMClient),
 urllib, and most pure-Python networking gets to the wire -- but it is NOT
-an airtight guarantee of offline operation:
+an airtight guarantee:
 
 - It cannot see connections opened by a C extension or a subprocess that
   bypasses Python's socket module entirely.
@@ -33,11 +36,12 @@ an airtight guarantee of offline operation:
 This script is REQUIRED before every release (see README.md's pre-release
 checklist) as a fast, repeatable, automatable gate -- but it is not a
 substitute for the real test: running the application on a machine with
-its network cable unplugged and Wi-Fi/mobile radio physically disabled.
-Only a physical disconnection tests the actual claim this project makes
-(that it runs on an air-gapped machine). A passing run of this script is
-necessary, not sufficient -- see README.md for the full pre-release
-checklist, including the physical-disconnection step.
+its network cable unplugged (and the LLM endpoint therefore genuinely
+unreachable) to confirm the deterministic parts of this project (EARS/
+INCOSE analysis, manual edit, Excel export) still work, exactly as
+src/llm/local_llm_client.py and src/consistency/analyzer.py are designed
+to degrade. A passing run of this script is necessary, not sufficient --
+see README.md for the full pre-release checklist.
 
 Usage:
     python scripts/verify_offline.py
@@ -51,47 +55,53 @@ import sys
 import tempfile
 from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import storage.db as db  # noqa: E402
-from llm.local_llm_client import LocalLLMClient, OllamaUnavailableError  # noqa: E402
+from config import get_settings  # noqa: E402
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError  # noqa: E402
 from pipeline.graph import build_graph, run_workbook  # noqa: E402
 
 _LOOPBACK_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
-def _is_loopback(address) -> bool:
+def _is_loopback_or_allowed(address, allowed_host: str) -> bool:
     """True if ``address`` (a (host, port) tuple, or a bare host string)
-    refers to the local loopback interface -- the one destination this
-    guard allows through."""
+    is either the local loopback interface, or the one configured LLM
+    endpoint host this guard allows through."""
     host = address[0] if isinstance(address, tuple) else address
-    if host in _LOOPBACK_HOSTNAMES:
+    if host in _LOOPBACK_HOSTNAMES or host == allowed_host:
         return True
     try:
         return ip_address(host).is_loopback
     except ValueError:
-        return False  # not a literal IP (an unresolved hostname) -- not provably loopback
+        return False  # not a literal IP (an unresolved hostname) -- not provably allowed
 
 
 class NetworkAccessBlockedError(RuntimeError):
     """Raised the instant code under NetworkGuard attempts to open a
-    connection to a non-loopback address -- before any real connection,
-    DNS lookup over the wire, or data transfer happens."""
+    connection to a host that is neither loopback nor the configured LLM
+    endpoint -- before any real connection, DNS lookup over the wire, or
+    data transfer happens."""
 
 
 class NetworkGuard:
     """Context manager: for its duration, any attempt to open a socket
-    connection to a non-loopback address raises NetworkAccessBlockedError
-    immediately instead of attempting the real connection. Loopback
-    connections (the local Ollama instance) pass through untouched.
+    connection to a host other than loopback or ``allowed_host`` raises
+    NetworkAccessBlockedError immediately instead of attempting the real
+    connection.
 
     Patches socket.socket.connect/connect_ex and socket.create_connection
     -- the choke points essentially all pure-Python networking (httpx,
     urllib, the stdlib itself) ultimately goes through. See this module's
     docstring for what this can and can't prove.
     """
+
+    def __init__(self, allowed_host: str):
+        self.allowed_host = allowed_host
 
     def __enter__(self) -> "NetworkGuard":
         self._real_connect = socket.socket.connect
@@ -121,14 +131,14 @@ class NetworkGuard:
         socket.create_connection = self._real_create_connection
         return False
 
-    @staticmethod
-    def _check(address) -> None:
-        if not _is_loopback(address):
+    def _check(self, address) -> None:
+        if not _is_loopback_or_allowed(address, self.allowed_host):
             raise NetworkAccessBlockedError(
                 f"Blocked an outbound connection attempt to {address!r}. This "
-                "project must be fully offline except for the local Ollama "
-                "connection (loopback only, see README.md). Something just "
-                "tried to reach a non-loopback address."
+                f"project must only ever reach loopback or the one configured "
+                f"LLM endpoint host ('{self.allowed_host}', from config/settings.yaml's "
+                "llm.base_url -- see README.md). Something just tried to reach "
+                "a different, unexpected address."
             )
 
 
@@ -151,14 +161,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.parse_args(argv)
 
+    settings = get_settings()
+    allowed_host = urlparse(settings["llm"]["base_url"]).hostname
+    if not allowed_host:
+        print(
+            f"ERROR: could not parse a hostname out of llm.base_url "
+            f"({settings['llm']['base_url']!r}) in config/settings.yaml.",
+            file=sys.stderr,
+        )
+        return 1
+
     client = LocalLLMClient()
     try:
         client.check_reachable()
-    except OllamaUnavailableError as exc:
+    except LLMUnavailableError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         print(
-            "(Ollama itself must be running locally for this check -- it is the "
-            "one connection this guard allows, over loopback only.)",
+            f"(The configured LLM endpoint ('{allowed_host}') must be reachable for "
+            "this check -- it is the one non-loopback connection this guard allows.)",
             file=sys.stderr,
         )
         return 1
@@ -173,11 +193,11 @@ def main(argv: list[str] | None = None) -> int:
 
         _build_sample_workbook(sample_path)
 
-        print("Network guard active: only loopback (Ollama) connections are allowed.")
+        print(f"Network guard active: only loopback and '{allowed_host}' connections are allowed.")
         print(f"Running the full pipeline against {sample_path.name} ...")
 
         try:
-            with NetworkGuard():
+            with NetworkGuard(allowed_host):
                 results = run_workbook(compiled_graph, sample_path)
 
                 conn = db.connect(db_path)
@@ -193,10 +213,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nFAIL: pipeline raised {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
 
-    print(f"\nPASS: processed {len(results)} requirement(s); no non-loopback network calls were attempted.")
+    print(
+        f"\nPASS: processed {len(results)} requirement(s); no connections outside "
+        f"loopback / '{allowed_host}' were attempted."
+    )
     print(
         "Reminder: this is an in-process check, not a substitute for physically "
-        "disconnecting the network -- see README.md's pre-release checklist."
+        "disconnecting the network to confirm the deterministic parts of this "
+        "project still work with the LLM endpoint genuinely unreachable -- see "
+        "README.md's pre-release checklist."
     )
     return 0
 

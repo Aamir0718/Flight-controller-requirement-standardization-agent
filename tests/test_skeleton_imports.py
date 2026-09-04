@@ -18,5 +18,6 @@ def test_settings_load():
     from config import get_settings
 
     settings = get_settings()
-    assert "ollama" in settings
-    assert "model" in settings["ollama"]
+    assert "llm" in settings
+    assert "model" in settings["llm"]
+    assert "base_url" in settings["llm"]

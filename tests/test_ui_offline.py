@@ -1,7 +1,7 @@
 """Confirms the UI stack (src/ui/api.py + the HTTP calls
 src/ui/streamlit_app.py makes) genuinely works with the network disabled
-except for loopback -- under the same NetworkGuard scripts/verify_offline.py
-uses for the pipeline itself.
+except for loopback and the configured LLM endpoint host -- under the
+same NetworkGuard scripts/verify_offline.py uses for the pipeline itself.
 
 tests/test_ui_api.py already covers the API's behavior thoroughly, but it
 uses FastAPI's TestClient, which talks to the ASGI app in-memory and never
@@ -95,7 +95,7 @@ def live_api_server(tmp_path, monkeypatch):
 
 
 def test_real_loopback_http_call_succeeds_under_the_network_guard(live_api_server):
-    with vo.NetworkGuard():
+    with vo.NetworkGuard("vllm.internal.example"):
         response = requests.get(f"{live_api_server}/health", timeout=5)
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -111,7 +111,7 @@ def test_full_upload_and_download_flow_over_real_loopback_sockets_under_the_guar
     sample_path = tmp_path / "sample.xlsx"
     workbook.save(sample_path)
 
-    with vo.NetworkGuard():
+    with vo.NetworkGuard("vllm.internal.example"):
         with open(sample_path, "rb") as f:
             upload_response = requests.post(
                 f"{live_api_server}/upload",
@@ -153,7 +153,7 @@ def test_guard_still_blocks_non_loopback_while_a_live_loopback_server_is_running
     effectively inert -- the previous two tests alone wouldn't catch a
     bug where NetworkGuard let everything through."""
     with pytest.raises(vo.NetworkAccessBlockedError):
-        with vo.NetworkGuard():
+        with vo.NetworkGuard("vllm.internal.example"):
             requests.get("http://203.0.113.1/", timeout=1)  # RFC 5737 TEST-NET, never real traffic
 
 

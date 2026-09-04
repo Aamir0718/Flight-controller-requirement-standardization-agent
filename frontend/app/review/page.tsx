@@ -364,7 +364,7 @@ function ReviewContent() {
                     <XCircle className="w-4 h-4 flex-shrink-0 text-[#FF4D4F] mt-0.5" />
                     <p className="text-xs text-[#FF4D4F] leading-relaxed">
                       {describeAIError(req.error_message)} Nothing was rewritten for this requirement — try
-                      Generate again once Ollama is running, or Edit it yourself.
+                      Generate again once the LLM endpoint is reachable, or Edit it yourself.
                     </p>
                   </div>
                 )}
@@ -457,7 +457,8 @@ function ReviewContent() {
                   <div className="p-4 rounded-xl bg-[#1EA7FF]/5 border border-[#1EA7FF]/30 flex items-center gap-3">
                     <Loader2 className="w-4 h-4 text-[#1EA7FF] flex-shrink-0 animate-spin" />
                     <p className="text-xs text-[#8FA3BF]">
-                      Generating candidate rewrites via Ollama — this can take seconds to several minutes on CPU.
+                      Generating candidate rewrites via the LLM endpoint — this can take a while depending on
+                      server load.
                     </p>
                   </div>
                 ) : (

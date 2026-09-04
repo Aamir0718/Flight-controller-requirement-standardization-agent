@@ -11,14 +11,17 @@ docstring for the full rationale):
   2. A human then decides, per requirement (or in bulk): POST
      /runs/{id}/requirements/generate to send it to the LLM, or PUT
      /runs/{id}/requirements/{req_id} to type a replacement themselves.
-     Only step 2 ever talks to Ollama, and only for the rows a human
-     actually asked for -- never automatically for a whole workbook.
+     Only step 2 ever talks to the LLM endpoint, and only for the rows a
+     human actually asked for -- never automatically for a whole workbook.
 
 No auth, no task queue, no websockets -- in-process FastAPI
 BackgroundTasks (for the LLM generate step only) and the same local
 SQLite file src/storage/db.py already uses are enough for a single-user
-local tool that, per this project's README, never talks to anything but
-a loopback Ollama instance.
+local tool. The only network call this app ever makes is to the
+DRDO-internal vLLM endpoint configured in config/settings.yaml's
+llm.base_url -- never a public/hosted API -- and only from the Generate
+action and consistency's contradiction check; everything else (analysis,
+manual edit, export) is local and works with that endpoint unreachable.
 
 Run it (binds to loopback by default, matching the offline requirement):
     uvicorn ui.api:app --app-dir src
@@ -40,7 +43,7 @@ from pydantic import BaseModel
 import storage.db as db
 from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
-from llm.local_llm_client import LocalLLMClient, OllamaUnavailableError
+from llm.local_llm_client import LocalLLMClient, LLMUnavailableError
 from pipeline.graph import analyze_requirement, generate_requirement
 from config import get_settings
 from ui import progress
@@ -139,7 +142,7 @@ def _error_code_for_exception(exc: Exception) -> str | None:
         return INVALID_EXCEL_FILE
 
     # LLM-related errors
-    if exc_name == "OllamaUnavailableError":
+    if exc_name == "LLMUnavailableError":
         return AI_SERVICE_UNAVAILABLE
     if exc_name == "LLMResponseError":
         return AI_RESPONSE_VALIDATION_FAILED
@@ -154,7 +157,7 @@ def _error_code_for_exception(exc: Exception) -> str | None:
 @app.get("/health")
 def health() -> dict[str, str]:
     settings = get_settings()
-    return {"status": "ok", "model": settings["ollama"]["model"]}
+    return {"status": "ok", "model": settings["llm"]["model"]}
 
 
 def _analyze_run(conn: sqlite3.Connection, run_id: int, file_path: Path) -> None:
@@ -202,7 +205,7 @@ def _generate_selected(run_id: int, requirement_ids: list[int]) -> None:
         client = LocalLLMClient()
         try:
             client.check_reachable()
-        except OllamaUnavailableError:
+        except LLMUnavailableError:
             for req_id in requirement_ids:
                 db.update_requirement_status(conn, req_id, "failed", error_message=AI_SERVICE_UNAVAILABLE)
             return
@@ -228,16 +231,17 @@ def _generate_selected(run_id: int, requirement_ids: list[int]) -> None:
 def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> bool:
     """Runs consistency analysis on all requirements in a run -- duplicate/
     similarity detection is pure embeddings (no LLM); contradiction
-    detection needs the LLM and is skipped (not a failure) if Ollama isn't
-    reachable, checked once for the whole run, not once per pair -- see
-    ConsistencyAnalyzer._is_llm_reachable(). Failures here should not fail
-    the entire run - we log and continue.
+    detection needs the LLM endpoint and is skipped (not a failure) if
+    it isn't reachable, checked once for the whole run, not once per pair
+    -- see ConsistencyAnalyzer._is_llm_reachable(). Failures here should
+    not fail the entire run - we log and continue.
 
     Returns True if contradiction detection was skipped because the LLM
-    wasn't reachable (duplicate/similarity results are still valid and
-    saved either way) -- callers use this to tell the human "duplicates
-    and similar pairs were found; contradiction checking needs Ollama
-    running" instead of silently under-reporting contradictions.
+    endpoint wasn't reachable (duplicate/similarity results are still
+    valid and saved either way) -- callers use this to tell the human
+    "duplicates and similar pairs were found; contradiction checking
+    needs the LLM endpoint reachable" instead of silently under-reporting
+    contradictions.
     """
     try:
         requirements = db.get_requirements_for_run(conn, run_id)
@@ -533,7 +537,7 @@ def reanalyze_consistency(run_id: int) -> dict:
 
         message = (
             "Consistency analysis completed, but contradiction detection was "
-            "skipped because the LLM (Ollama) is not reachable -- duplicate and "
+            "skipped because the LLM endpoint is not reachable -- duplicate and "
             "similarity results (no LLM needed) are still complete and accurate."
             if contradiction_check_skipped
             else "Consistency analysis completed"

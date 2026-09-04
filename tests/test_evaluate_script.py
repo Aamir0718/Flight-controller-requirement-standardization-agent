@@ -1,9 +1,9 @@
 """Tests for scripts/evaluate.py's logic, driven entirely by a fake LLM
-client -- no real Ollama needed, so this always runs. The point is to
+client -- no real LLM endpoint needed, so this always runs. The point is to
 verify the metric computation (accuracy %, vague-term handling %,
 scoring-comparison %, failure collection) is correct, since a live 60-example
 x 3-candidate run isn't something this suite can exercise for real in an
-environment without a running Ollama instance.
+environment without a reachable LLM endpoint.
 
 scripts/ isn't an installed package (only src/ is, per pyproject.toml), so
 these tests add it to sys.path directly, the same way evaluate.py adds
@@ -22,7 +22,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 import evaluate  # noqa: E402
 
-from llm.local_llm_client import LLMResult, OllamaUnavailableError  # noqa: E402
+from llm.local_llm_client import LLMResult, LLMUnavailableError  # noqa: E402
 
 GOLDEN_DIR = Path(__file__).resolve().parent.parent / "data" / "golden"
 
@@ -64,7 +64,7 @@ class _AlwaysFailsClient:
 
 class _RaisesUnavailableClient:
     def check_reachable(self):
-        raise OllamaUnavailableError("Ollama not reachable (simulated)")
+        raise LLMUnavailableError("LLM endpoint not reachable (simulated)")
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ def test_run_evaluation_end_to_end_on_real_eval_examples_with_fake_client():
 
 
 # ---------------------------------------------------------------------------
-# main() CLI: fails fast without Ollama, writes a valid report when reachable
+# main() CLI: fails fast without the LLM endpoint, writes a valid report when reachable
 # ---------------------------------------------------------------------------
 
 

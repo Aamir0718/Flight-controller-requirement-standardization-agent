@@ -1,10 +1,10 @@
-"""Loads config/settings.yaml so no model name, host, port, or path is
+"""Loads config/settings.yaml so no model name, base URL, or path is
 hardcoded anywhere else in the application.
 
 Usage:
     from config import get_settings
     settings = get_settings()
-    model_name = settings["ollama"]["model"]
+    model_name = settings["llm"]["model"]
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ import yaml
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
 
 # Cache keyed by the file's last-modified time, not a plain @lru_cache --
-# the configured Ollama model (settings.yaml's ollama.model) gets swapped
-# often during offline development (gemma3:4b, gemma3:1b, qwen3:6b, ...),
-# and a plain cache would keep serving the model name/config the backend
-# process happened to start with until it was restarted. Re-stat()ing a
-# few-KB YAML file is negligible next to an LLM call, so there's no real
-# cost to just checking every time.
+# the configured LLM endpoint/model (settings.yaml's llm.base_url/model)
+# can get swapped during development, and a plain cache would keep
+# serving the model name/config the backend process happened to start
+# with until it was restarted. Re-stat()ing a few-KB YAML file is
+# negligible next to an LLM call, so there's no real cost to just
+# checking every time.
 _cached_settings: dict[str, Any] | None = None
 _cached_mtime: float | None = None
 _cached_path: Path | None = None

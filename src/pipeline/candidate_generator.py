@@ -8,12 +8,12 @@ between candidates that are all the same defeats the point of generating
 3 in the first place.
 
 The 3 calls are independent (own prompt variant, own temperature/seed) and
-each is a blocking HTTP call to Ollama, so they run concurrently via a
-thread pool rather than one at a time -- a real wall-clock speedup
-whenever Ollama can service more than one request at a time (ollama.Client
-wraps an httpx.Client, which is safe for concurrent use from multiple
-threads). If Ollama itself only processes one request at a time, this
-costs nothing extra either way.
+each is a blocking HTTP call to the configured LLM endpoint, so they run
+concurrently via a thread pool rather than one at a time -- a real
+wall-clock speedup whenever the server can service more than one request
+at a time (LocalLLMClient wraps an httpx.Client, which is safe for
+concurrent use from multiple threads). If the server only processes one
+request at a time, this costs nothing extra either way.
 
 Scoring/picking a winner is NOT this module's job -- see
 src/pipeline/recommender.py, which runs the deterministic INCOSE scorer
@@ -62,7 +62,7 @@ def generate_candidates(
     temperature/seed each call. Returns one Candidate per call, in order.
 
     Raises whatever LocalLLMClient.generate_structured raises
-    (OllamaUnavailableError, LLMResponseError) -- a partial candidate set
+    (LLMUnavailableError, LLMResponseError) -- a partial candidate set
     is not a useful result, so this does not swallow errors from
     individual calls. All ``num_candidates`` calls are already in flight
     concurrently by the time any one of them can fail, so (unlike the old

@@ -82,10 +82,11 @@ export function Sidebar() {
       <div className="p-4 m-3 rounded-xl bg-[#0F172A] border border-[#243244] space-y-2">
         <div className="flex items-center gap-2 text-xs font-semibold text-[#00C853]">
           <ShieldCheck className="w-4 h-4" />
-          <span>Air-Gapped Offline Mode</span>
+          <span>Local-First Analysis</span>
         </div>
         <p className="text-[11px] text-[#8FA3BF] leading-relaxed">
-          Local SQLite & Ollama loopback environment active. No external network data transmission.
+          Local SQLite storage. Analysis, editing, and export are fully local — only Generate and
+          contradiction detection reach the configured DRDO-internal LLM endpoint.
         </p>
       </div>
     </aside>

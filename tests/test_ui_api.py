@@ -1,5 +1,5 @@
 """Tests for src/ui/api.py, using FastAPI's TestClient with a fake LLM
-client (no real Ollama needed) and a throwaway per-test SQLite database
+client (no real LLM endpoint needed) and a throwaway per-test SQLite database
 and upload/export directory -- never touches the real data/app.db.
 
 POST /upload is now purely deterministic (analyze_requirement() for every
@@ -24,7 +24,7 @@ from openpyxl import Workbook, load_workbook
 import storage.db as db_module
 import ui.api as api
 
-from llm.local_llm_client import LLMResult, OllamaUnavailableError
+from llm.local_llm_client import LLMResult, LLMUnavailableError
 
 _REAL_CONNECT = db_module.connect
 
@@ -44,7 +44,7 @@ class _FakeWorkingClient:
 
 class _FakeUnreachableClient:
     def check_reachable(self):
-        raise OllamaUnavailableError("simulated: Ollama not reachable")
+        raise LLMUnavailableError("simulated: LLM endpoint not reachable")
 
 
 class _FakeCrashesMidGenerationClient:
@@ -187,7 +187,7 @@ class TestGenerateRequirements:
             assert req["status"] == "generated"
             assert len(req["candidates"]) == 3
 
-    def test_ollama_unreachable_marks_selected_requirements_failed(self, api_env, monkeypatch):
+    def test_llm_unreachable_marks_selected_requirements_failed(self, api_env, monkeypatch):
         client, _ = api_env
         monkeypatch.setattr(api, "LocalLLMClient", _FakeUnreachableClient)
         run_id = _upload(client).json()["run_id"]

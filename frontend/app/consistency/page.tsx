@@ -54,10 +54,10 @@ const getRelationshipBadge = (type: string) => {
 export default function ConsistencyPage() {
   const { activeRunId } = useActiveRun();
   // Duplicate/similarity detection is pure embeddings and never needs the
-  // LLM; contradiction detection does. If Ollama isn't reachable, the
-  // backend still returns valid duplicate/similar results and just skips
-  // contradiction checking -- this banner is how that gets surfaced,
-  // instead of it silently under-reporting contradictions.
+  // LLM; contradiction detection does. If the LLM endpoint isn't
+  // reachable, the backend still returns valid duplicate/similar results
+  // and just skips contradiction checking -- this banner is how that gets
+  // surfaced, instead of it silently under-reporting contradictions.
   const [lastMessage, setLastMessage] = useState<{ text: string; isWarning: boolean } | null>(null);
 
   const {

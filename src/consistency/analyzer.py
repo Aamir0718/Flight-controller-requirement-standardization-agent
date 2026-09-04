@@ -1,6 +1,6 @@
 """Consistency analyzer for detecting duplicate, similar, and contradictory requirements.
 
-Uses sentence embeddings for semantic similarity and local LLM for contradiction detection.
+Uses sentence embeddings for semantic similarity and the configured LLM endpoint for contradiction detection.
 Falls back to TF-IDF if sentence-transformers is blocked by system security policies.
 """
 
@@ -161,7 +161,7 @@ class ConsistencyAnalyzer:
         return self._llm_client
 
     def _is_llm_reachable(self) -> bool:
-        """Checks Ollama reachability ONCE per analyze_requirements() call
+        """Checks LLM endpoint reachability ONCE per analyze_requirements() call
         and caches the result -- calling check_reachable() once per
         candidate pair (as this used to do, inside _check_contradiction())
         means a run with dozens of medium-similarity pairs would retry a
@@ -384,7 +384,7 @@ class ConsistencyAnalyzer:
     def _check_contradiction(self, text1: str, text2: str) -> tuple[bool, str]:
         """Use LLM to check if two requirements contradict each other.
         Only ever called after _is_llm_reachable() has already confirmed
-        Ollama is up (see _classify_pair) -- no redundant check_reachable()
+        the endpoint is up (see _classify_pair) -- no redundant check_reachable()
         call here; the try/except below is a safety net for the LLM
         dropping mid-batch, not the primary "is it even up" gate.
 

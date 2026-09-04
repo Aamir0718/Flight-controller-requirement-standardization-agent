@@ -1,6 +1,6 @@
 """Precision/recall evaluation for src/pipeline/graph.py's pre-LLM EARS
 compliance gate (the ComplianceCheck node) -- pure Python, no LLM, no
-network, no Ollama dependency, finishes in a fraction of a second even
+network, no LLM endpoint dependency, finishes in a fraction of a second even
 for hundreds of examples (the gate itself is a regex/keyword classifier).
 
 Ground truth, "positive" = "should be rejected" (not EARS compliant):
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Evaluated {report['total_examples']} examples "
         f"({report['positive_examples_should_reject']} should-reject, "
         f"{report['negative_examples_should_pass']} should-pass) "
-        f"in {report['elapsed_seconds']}s -- pure Python, no LLM, no Ollama needed"
+        f"in {report['elapsed_seconds']}s -- pure Python, no LLM endpoint needed"
     )
     print(f"Wrote {args.output}\n")
     print("Confusion matrix:")

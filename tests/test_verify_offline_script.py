@@ -23,13 +23,16 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import verify_offline as vo  # noqa: E402
 
 from ingestion.parser import parse_workbook  # noqa: E402
-from llm.local_llm_client import LLMResult, OllamaUnavailableError  # noqa: E402
+from llm.local_llm_client import LLMResult, LLMUnavailableError  # noqa: E402
 
 NON_ROUTABLE_ADDRESS = ("203.0.113.1", 80)  # RFC 5737 TEST-NET-3, never real traffic
 
 
+_DUMMY_ALLOWED_HOST = "vllm.internal.example"
+
+
 class _FakeQuietClient:
-    """Never touches a socket -- simulates a well-behaved Ollama client."""
+    """Never touches a socket -- simulates a well-behaved LLM client."""
 
     temperature = 0.2
 
@@ -59,29 +62,36 @@ class _FakeMisbehavingClient:
 
 class _RaisesUnavailableClient:
     def check_reachable(self):
-        raise OllamaUnavailableError("simulated: Ollama not reachable")
+        raise LLMUnavailableError("simulated: LLM endpoint not reachable")
 
 
 # ---------------------------------------------------------------------------
-# _is_loopback
+# _is_loopback_or_allowed
 # ---------------------------------------------------------------------------
 
 
-class TestIsLoopback:
+class TestIsLoopbackOrAllowed:
     @pytest.mark.parametrize("address", [
         "127.0.0.1", "localhost", "::1", "0.0.0.0",
         ("127.0.0.1", 11434), ("localhost", 11434), ("::1", 8080),
         "127.255.255.255",  # entire 127.0.0.0/8 is loopback
     ])
-    def test_recognizes_loopback_addresses(self, address):
-        assert vo._is_loopback(address) is True
+    def test_recognizes_loopback_addresses_regardless_of_allowed_host(self, address):
+        assert vo._is_loopback_or_allowed(address, _DUMMY_ALLOWED_HOST) is True
 
     @pytest.mark.parametrize("address", [
         "203.0.113.1", "8.8.8.8", ("203.0.113.1", 80), "example.com",
         ("api.openai.com", 443), "2001:db8::1",
     ])
-    def test_rejects_non_loopback_addresses(self, address):
-        assert vo._is_loopback(address) is False
+    def test_rejects_addresses_that_are_neither_loopback_nor_the_allowed_host(self, address):
+        assert vo._is_loopback_or_allowed(address, _DUMMY_ALLOWED_HOST) is False
+
+    def test_recognizes_the_configured_allowed_host_itself(self):
+        assert vo._is_loopback_or_allowed(_DUMMY_ALLOWED_HOST, _DUMMY_ALLOWED_HOST) is True
+        assert vo._is_loopback_or_allowed((_DUMMY_ALLOWED_HOST, 8001), _DUMMY_ALLOWED_HOST) is True
+
+    def test_a_different_host_is_still_rejected_even_if_similar(self):
+        assert vo._is_loopback_or_allowed("evil-" + _DUMMY_ALLOWED_HOST, _DUMMY_ALLOWED_HOST) is False
 
 
 # ---------------------------------------------------------------------------
@@ -92,12 +102,12 @@ class TestIsLoopback:
 class TestNetworkGuard:
     def test_blocks_connect_to_non_loopback_address(self):
         with pytest.raises(vo.NetworkAccessBlockedError, match="203.0.113.1"):
-            with vo.NetworkGuard():
+            with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
                 socket.create_connection(NON_ROUTABLE_ADDRESS, timeout=1)
 
     def test_blocks_raw_socket_connect_to_non_loopback_address(self):
         with pytest.raises(vo.NetworkAccessBlockedError):
-            with vo.NetworkGuard():
+            with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     s.connect(NON_ROUTABLE_ADDRESS)
@@ -117,7 +127,7 @@ class TestNetworkGuard:
         thread = threading.Thread(target=accept_once, daemon=True)
         thread.start()
         try:
-            with vo.NetworkGuard():
+            with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
                 client_sock = socket.create_connection(("127.0.0.1", port), timeout=2)
                 client_sock.close()
         finally:
@@ -128,7 +138,7 @@ class TestNetworkGuard:
     def test_restores_original_socket_methods_after_normal_exit(self):
         original_connect = socket.socket.connect
         original_create_connection = socket.create_connection
-        with vo.NetworkGuard():
+        with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
             pass
         assert socket.socket.connect is original_connect
         assert socket.create_connection is original_create_connection
@@ -137,7 +147,7 @@ class TestNetworkGuard:
         original_connect = socket.socket.connect
         original_create_connection = socket.create_connection
         with pytest.raises(vo.NetworkAccessBlockedError):
-            with vo.NetworkGuard():
+            with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
                 socket.create_connection(NON_ROUTABLE_ADDRESS, timeout=1)
         assert socket.socket.connect is original_connect
         assert socket.create_connection is original_create_connection
@@ -151,7 +161,7 @@ class TestNetworkGuard:
 
         start = time.monotonic()
         with pytest.raises(vo.NetworkAccessBlockedError):
-            with vo.NetworkGuard():
+            with vo.NetworkGuard(_DUMMY_ALLOWED_HOST):
                 socket.create_connection(NON_ROUTABLE_ADDRESS, timeout=1)
         assert time.monotonic() - start < 0.5
 

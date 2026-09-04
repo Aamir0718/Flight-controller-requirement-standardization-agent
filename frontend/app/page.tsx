@@ -153,7 +153,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="text-xl font-bold font-mono text-[#F5F7FA]">{healthData?.model || "Loading..."}</div>
-          <p className="text-xs text-[#8FA3BF]">Local Ollama offline server</p>
+          <p className="text-xs text-[#8FA3BF]">DRDO-internal LLM endpoint (vLLM)</p>
         </motion.div>
 
         <motion.div
