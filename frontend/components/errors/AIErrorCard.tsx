@@ -18,6 +18,17 @@ export function isAIError(errorMessage?: string | null): boolean {
   return AI_ERROR_CODES.includes(errorMessage as AIErrorCode);
 }
 
+/** Maps a backend error code (e.g. "AI_SERVICE_UNAVAILABLE") to a short,
+ * human-readable message -- for compact inline use (a per-row badge/note)
+ * where the full AIErrorCard below would be too heavy. Falls back to the
+ * raw code itself for anything not in ERROR_CONFIG, so an unrecognized
+ * code is still visible rather than silently swallowed. */
+export function describeAIError(errorCode?: string | null): string {
+  if (!errorCode) return "Unknown error.";
+  const config = errorCode in ERROR_CONFIG ? ERROR_CONFIG[errorCode as AIErrorCode] : null;
+  return config ? config.description : errorCode;
+}
+
 interface AIErrorCardProps {
   errorCode?: string | null;
   technicalDetails?: string | null;

@@ -68,11 +68,21 @@ class RequirementRelationship:
 
 @dataclass(frozen=True)
 class ConsistencyResult:
-    """Result of consistency analysis for a run."""
+    """Result of consistency analysis for a run.
+
+    ``contradiction_check_skipped`` is True when contradiction detection
+    was configured on (consistency.enable_contradiction_check) but the LLM
+    wasn't reachable when this analysis ran -- duplicate/similarity
+    detection (pure embeddings, no LLM) still completed normally either
+    way. Lets callers surface one clear "contradiction detection was
+    skipped, LLM not reachable" message instead of a human having to
+    notice it's buried in every affected pair's own reason text.
+    """
     run_id: int
     total_requirements: int
     relationships: list[RequirementRelationship]
     summary: dict[str, int]
+    contradiction_check_skipped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +90,7 @@ class ConsistencyResult:
             "total_requirements": self.total_requirements,
             "relationships": [r.to_dict() for r in self.relationships],
             "summary": self.summary,
+            "contradiction_check_skipped": self.contradiction_check_skipped,
         }
 
 
@@ -114,6 +125,9 @@ class ConsistencyAnalyzer:
         self._embedding_model: SentenceTransformer | None = None
         self._tfidf_vectorizer: TfidfVectorizer | None = None
         self._llm_client: LocalLLMClient | None = None
+        # Checked once per analyzer instance (i.e. once per analyze_requirements()
+        # call), not once per pair -- see _is_llm_reachable().
+        self._llm_reachable: bool | None = None
 
     @property
     def embedding_model(self) -> SentenceTransformer | TfidfVectorizer:
@@ -145,6 +159,24 @@ class ConsistencyAnalyzer:
         if self._llm_client is None:
             self._llm_client = LocalLLMClient(self.settings)
         return self._llm_client
+
+    def _is_llm_reachable(self) -> bool:
+        """Checks Ollama reachability ONCE per analyze_requirements() call
+        and caches the result -- calling check_reachable() once per
+        candidate pair (as this used to do, inside _check_contradiction())
+        means a run with dozens of medium-similarity pairs would retry a
+        doomed connection dozens of times before giving up, for no benefit
+        (the answer doesn't change pair to pair). One check up front is
+        both faster and lets the caller report one clear reason instead of
+        it being silently buried in every affected pair's own text.
+        """
+        if self._llm_reachable is None:
+            try:
+                self.llm_client.check_reachable()
+                self._llm_reachable = True
+            except Exception:
+                self._llm_reachable = False
+        return self._llm_reachable
 
     def analyze_requirements(
         self,
@@ -221,6 +253,12 @@ class ConsistencyAnalyzer:
             total_requirements=n,
             relationships=relationships,
             summary=summary,
+            # True only if contradiction checking was actually attempted
+            # (enable_contradiction_check on, at least one pair reached
+            # similarity_threshold) and the LLM turned out unreachable --
+            # self._llm_reachable stays None (not False) if it was never
+            # checked at all, which must NOT be reported as "skipped".
+            contradiction_check_skipped=self._llm_reachable is False,
         )
 
     def compute_pairwise_similarities(self, requirements: list[dict[str, Any]]) -> dict[str, Any]:
@@ -308,9 +346,11 @@ class ConsistencyAnalyzer:
                 reason="Very high semantic similarity indicates duplicate requirement.",
             )
 
-        # Medium similarity - check for contradiction if enabled
+        # Medium similarity - check for contradiction if enabled and the
+        # LLM is actually reachable (checked once per run, not per pair --
+        # see _is_llm_reachable()).
         if similarity >= self.similarity_threshold:
-            if self.enable_contradiction_check:
+            if self.enable_contradiction_check and self._is_llm_reachable():
                 is_contradiction, reason = self._check_contradiction(text1, text2)
                 if is_contradiction:
                     return RequirementRelationship(
@@ -343,6 +383,10 @@ class ConsistencyAnalyzer:
 
     def _check_contradiction(self, text1: str, text2: str) -> tuple[bool, str]:
         """Use LLM to check if two requirements contradict each other.
+        Only ever called after _is_llm_reachable() has already confirmed
+        Ollama is up (see _classify_pair) -- no redundant check_reachable()
+        call here; the try/except below is a safety net for the LLM
+        dropping mid-batch, not the primary "is it even up" gate.
 
         Args:
             text1: First requirement text
@@ -352,9 +396,7 @@ class ConsistencyAnalyzer:
             Tuple of (is_contradiction, reason)
         """
         try:
-            self.llm_client.check_reachable()
-
-            system_prompt = """You are an expert in aerospace requirements engineering. 
+            system_prompt = """You are an expert in aerospace requirements engineering.
 Analyze whether two requirements contradict each other.
 
 A contradiction exists when one requirement explicitly prohibits or prevents 

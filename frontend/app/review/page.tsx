@@ -20,6 +20,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useActiveRun } from "@/context/ActiveRunContext";
 import { ReviewEmptyState } from "@/components/empty-states/ReviewEmptyState";
+import { describeAIError } from "@/components/errors/AIErrorCard";
 
 // Badge color/label per requirement status (src/storage/db.py's
 // REQUIREMENT_STATUSES) -- "analyzed" is deliberately NOT green or red on
@@ -362,7 +363,8 @@ function ReviewContent() {
                   <div className="p-3.5 rounded-xl bg-[#FF4D4F]/10 border border-[#FF4D4F]/30 flex items-start gap-2.5">
                     <XCircle className="w-4 h-4 flex-shrink-0 text-[#FF4D4F] mt-0.5" />
                     <p className="text-xs text-[#FF4D4F] leading-relaxed">
-                      Generation failed: {req.error_message}. Try Generate again, or Edit this requirement yourself.
+                      {describeAIError(req.error_message)} Nothing was rewritten for this requirement — try
+                      Generate again once Ollama is running, or Edit it yourself.
                     </p>
                   </div>
                 )}

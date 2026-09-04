@@ -109,7 +109,12 @@ export const apiService = {
     return data;
   },
 
-  async reanalyzeConsistency(runId: number): Promise<{ message: string; summary: Record<string, number>; relationships_count: number }> {
+  async reanalyzeConsistency(runId: number): Promise<{
+    message: string;
+    contradiction_check_skipped: boolean;
+    summary: Record<string, number>;
+    relationships_count: number;
+  }> {
     const { data } = await apiClient.post(`/runs/${runId}/reanalyze-consistency`);
     return data;
   },
