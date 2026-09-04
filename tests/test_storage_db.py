@@ -290,6 +290,164 @@ class TestRequirementTrace:
 
 
 # ---------------------------------------------------------------------------
+# Requirement lifecycle: analyze -> (generate | edit)
+# ---------------------------------------------------------------------------
+
+
+def _analyzed_result(original_text: str = "TBD, needs work.") -> dict:
+    """Shaped like src/pipeline/graph.py's analyze_requirement() output --
+    candidates=[], recommended_index=-1, status="analyzed"."""
+    return {
+        "original_text": original_text,
+        "source_location": {"source": "inline"},
+        "rule_flags": [],
+        "ears_pattern": {"pattern": "Unclear", "confidence": 0.0, "reason": "no shall clause"},
+        "candidates": [],
+        "recommended_index": -1,
+        "recommended_text": original_text,
+        "recommended_score": 42.0,
+        "vague_term_suggestions": [],
+        "compliance_threshold": 80.0,
+        "needs_human_review": True,
+        "violations": [{"id": "R7", "title": "Vague Terms", "category": "Accuracy", "reasons": ["x"]}],
+        "status": "analyzed",
+    }
+
+
+class TestRequirementLifecycle:
+    def test_analyzed_row_has_no_candidates_and_carries_violations(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        fetched = db.get_requirement(conn, req_id)
+
+        assert fetched["status"] == "analyzed"
+        assert fetched["candidates"] == []
+        assert fetched["recommended_index"] == -1
+        assert len(fetched["violations"]) == 1
+        assert fetched["violations"][0]["id"] == "R7"
+
+    def test_update_requirement_status_changes_only_status_and_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+
+        db.update_requirement_status(conn, req_id, "generating")
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["status"] == "generating"
+        assert fetched["original_text"] == "TBD, needs work."  # untouched
+
+        db.update_requirement_status(conn, req_id, "failed", error_message="AI_SERVICE_UNAVAILABLE")
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["status"] == "failed"
+        assert fetched["error_message"] == "AI_SERVICE_UNAVAILABLE"
+
+    def test_update_requirement_status_rejects_unknown_status(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        with pytest.raises(ValueError, match="Unknown requirement status"):
+            db.update_requirement_status(conn, req_id, "bogus")
+
+    def test_apply_generation_result_overwrites_candidates_and_sets_generated(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+
+        generated = _result(needs_human_review=False)
+        db.apply_generation_result(conn, req_id, generated)
+        fetched = db.get_requirement(conn, req_id)
+
+        assert fetched["status"] == "generated"
+        assert fetched["candidates"] == generated["candidates"]
+        assert fetched["recommended_text"] == generated["recommended_text"]
+        assert fetched["needs_human_review"] is False
+        # original_text is NOT overwritten by generation -- it's the
+        # source-of-truth Excel cell, generate_requirement() never touches it.
+        assert fetched["original_text"] == "TBD, needs work."
+
+    def test_apply_manual_edit_rescopes_as_edited_no_llm_involved(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+
+        edited_text = "When the fuel level drops below reserve, the system shall alert the pilot."
+        updated = db.apply_manual_edit(conn, req_id, edited_text)
+
+        assert updated["status"] == "edited"
+        assert updated["recommended_text"] == edited_text
+        assert updated["recommended_index"] == -1
+        assert updated["needs_human_review"] is False
+        assert updated["recommended_score"] > 42.0  # real re-score, not left stale
+        assert updated["candidates"] == []  # no LLM candidates were ever generated
+
+    def test_status_defaults_to_generated_for_old_style_results_without_it(self, conn):
+        # A result dict shaped like the pre-split run_requirement() output
+        # (no "status"/"violations" keys at all) must still save cleanly.
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        old_style = _result()
+        assert "status" not in old_style and "violations" not in old_style
+        req_id = db.save_requirement(conn, run_id, 0, old_style)
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["status"] == "generated"
+        assert fetched["violations"] == []
+
+
+class TestSchemaMigration:
+    def test_pre_existing_database_gets_new_columns_added(self, db_path):
+        """Simulates a database file created before status/violations_json/
+        error_message existed -- db.connect() must add them without losing
+        any existing row, and must correctly infer "generated" (not the
+        column's own default "analyzed") for a row that already has real
+        LLM candidates from the old one-shot pipeline."""
+        # Build a pre-migration database by hand: the old schema, one row
+        # with real candidates already in it (as the old full pipeline
+        # would have left it).
+        raw = sqlite3.connect(str(db_path))
+        raw.executescript(
+            """
+            CREATE TABLE runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT NOT NULL,
+                file_path TEXT, file_size_bytes INTEGER, sha256 TEXT,
+                uploaded_at TEXT NOT NULL, requirement_count INTEGER NOT NULL DEFAULT 0,
+                total_requirements INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+                error_message TEXT
+            );
+            CREATE TABLE requirements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL,
+                sequence_in_run INTEGER NOT NULL, original_text TEXT NOT NULL,
+                source_location_json TEXT NOT NULL, ears_pattern_json TEXT NOT NULL,
+                rule_flags_json TEXT NOT NULL, candidates_json TEXT NOT NULL,
+                recommended_index INTEGER NOT NULL, recommended_text TEXT NOT NULL,
+                recommended_score REAL NOT NULL, vague_term_suggestions_json TEXT NOT NULL,
+                compliance_threshold REAL NOT NULL, needs_human_review INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO runs (file_name, uploaded_at, requirement_count, status)
+                VALUES ('legacy.xlsx', '2025-01-01T00:00:00', 1, 'completed');
+            INSERT INTO requirements (
+                run_id, sequence_in_run, original_text, source_location_json,
+                ears_pattern_json, rule_flags_json, candidates_json,
+                recommended_index, recommended_text, recommended_score,
+                vague_term_suggestions_json, compliance_threshold,
+                needs_human_review, created_at
+            ) VALUES (
+                1, 0, 'The gateway shall log connections.', '{}', '{}', '[]',
+                '[{"index": 0, "rewritten_text": "x", "score": 90.0}]',
+                0, 'x', 90.0, '[]', 80.0, 0, '2025-01-01T00:00:00'
+            );
+            """
+        )
+        raw.commit()
+        raw.close()
+
+        conn = db.connect(db_path)
+        fetched = db.get_requirements_for_run(conn, 1)
+        assert len(fetched) == 1
+        assert fetched[0]["original_text"] == "The gateway shall log connections."
+        # The whole point: NOT stuck at the ADD COLUMN default "analyzed"
+        # despite already having a real candidate and recommended_index.
+        assert fetched[0]["status"] == "generated"
+        assert fetched[0]["violations"] == []
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Excel export
 # ---------------------------------------------------------------------------
 
@@ -316,9 +474,9 @@ class TestExcelExport:
         ws = load_workbook(out_path).active
         headers = [cell.value for cell in ws[1]]
         assert headers == [
-            "#", "Source Location", "Original Requirement", "EARS Pattern",
+            "#", "Source Location", "Original Requirement", "EARS Pattern", "Status",
             "Recommended Requirement", "Compliance Score",
-            "Alternate 1", "Alternate 2", "Needs Review", "Suggestions",
+            "Alternate 1", "Alternate 2", "Needs Review", "Suggestions", "Violations",
         ]
 
     def test_recommended_and_alternate_columns_are_populated_correctly(self, conn, tmp_path):
@@ -326,9 +484,9 @@ class TestExcelExport:
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        recommended_cell = ws.cell(row=2, column=5).value
-        alt1_cell = ws.cell(row=2, column=7).value
-        alt2_cell = ws.cell(row=2, column=8).value
+        recommended_cell = ws.cell(row=2, column=6).value
+        alt1_cell = ws.cell(row=2, column=8).value
+        alt2_cell = ws.cell(row=2, column=9).value
 
         assert "While in orbit" in recommended_cell  # candidate index 1's text
         # alternates are the two non-recommended candidates, with their scores shown
@@ -338,13 +496,21 @@ class TestExcelExport:
         assert "While in orbit" not in alt1_cell
         assert "While in orbit" not in alt2_cell
 
+    def test_status_column_shows_a_human_readable_label(self, conn, tmp_path):
+        run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result()])
+        out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
+        ws = load_workbook(out_path).active
+        # _result() has no "status" key -> save_requirement() defaults it to
+        # "generated" (old-style one-shot pipeline result).
+        assert ws.cell(row=2, column=5).value == db._STATUS_LABELS["generated"]
+
     def test_needs_review_column_and_row_color_for_flagged_requirement(self, conn, tmp_path):
         run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result(needs_human_review=True)])
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        assert ws.cell(row=2, column=9).value == "Yes"
-        fill_rgb = ws.cell(row=2, column=9).fill.start_color.rgb
+        assert ws.cell(row=2, column=10).value == "Yes"
+        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
         assert fill_rgb.endswith(db._NEEDS_REVIEW_FILL)
 
     def test_needs_review_column_and_row_color_for_clean_requirement(self, conn, tmp_path):
@@ -352,8 +518,35 @@ class TestExcelExport:
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        assert ws.cell(row=2, column=9).value == "No"
-        fill_rgb = ws.cell(row=2, column=9).fill.start_color.rgb
+        assert ws.cell(row=2, column=10).value == "No"
+        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert fill_rgb.endswith(db._OK_FILL)
+
+    def test_analyzed_but_not_yet_generated_requirement_is_red(self, conn, tmp_path):
+        """The user-visible point of the whole status column: a row that
+        was only deterministically analyzed (no Generate/Edit yet) must
+        show red, not green, even though nothing "failed" -- it just
+        hasn't been resolved by a human yet."""
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.save_requirement(conn, run_id, 0, _analyzed_result())
+        out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
+        ws = load_workbook(out_path).active
+
+        assert ws.cell(row=2, column=5).value == db._STATUS_LABELS["analyzed"]
+        assert ws.cell(row=2, column=10).value == "Yes"
+        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert fill_rgb.endswith(db._NEEDS_REVIEW_FILL)
+
+    def test_edited_requirement_is_green(self, conn, tmp_path):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        db.apply_manual_edit(conn, req_id, "The gateway shall log every connection attempt.")
+        out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
+        ws = load_workbook(out_path).active
+
+        assert ws.cell(row=2, column=5).value == db._STATUS_LABELS["edited"]
+        assert ws.cell(row=2, column=10).value == "No"
+        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
         assert fill_rgb.endswith(db._OK_FILL)
 
     def test_entire_row_is_color_highlighted_not_just_one_cell(self, conn, tmp_path):
@@ -361,7 +554,7 @@ class TestExcelExport:
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        for col in range(1, 11):
+        for col in range(1, len(db._HEADERS) + 1):
             fill_rgb = ws.cell(row=2, column=col).fill.start_color.rgb
             assert fill_rgb.endswith(db._NEEDS_REVIEW_FILL)
 
@@ -374,13 +567,26 @@ class TestExcelExport:
         )
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=10).value == "continuously: specify a sampling rate in Hz"
+        assert ws.cell(row=2, column=11).value == "continuously: specify a sampling rate in Hz"
 
     def test_empty_suggestions_render_as_none_placeholder(self, conn, tmp_path):
         run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result(vague_term_suggestions=[])])
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=10).value == "(none)"
+        assert ws.cell(row=2, column=11).value == "(none)"
+
+    def test_violations_column_lists_rule_id_title_and_reason(self, conn, tmp_path):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.save_requirement(conn, run_id, 0, _analyzed_result())
+        out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
+        ws = load_workbook(out_path).active
+        assert ws.cell(row=2, column=12).value == "R7 (Vague Terms): x"
+
+    def test_empty_violations_render_as_none_placeholder(self, conn, tmp_path):
+        run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result()])
+        out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
+        ws = load_workbook(out_path).active
+        assert ws.cell(row=2, column=12).value == "(none)"
 
     def test_source_location_from_a_real_spreadsheet_cell_is_formatted_as_sheet_and_cell(self, conn, tmp_path):
         location = {

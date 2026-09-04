@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   UploadCloud,
-  Cpu,
   FileCheck2,
   Columns3,
   BarChart3,
@@ -18,10 +17,16 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// No "Processing Status" nav entry: analysis now runs synchronously
+// inside POST /upload (see src/ui/api.py's module docstring), so there's
+// no separate processing phase left to show a status page for -- Upload
+// goes straight to Requirement Review. src/app/processing/ still exists
+// on disk but is unreachable from navigation; only LLM generation is ever
+// asynchronous now, and its live status is the per-row badge on the
+// Review page itself, not a separate page.
 const navItems = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Upload Workbook", href: "/upload", icon: UploadCloud },
-  { name: "Processing Status", href: "/processing", icon: Cpu },
   { name: "Requirement Review", href: "/review", icon: FileCheck2 },
   { name: "Comparison Matrix", href: "/compare", icon: Columns3 },
   { name: "Consistency Analysis", href: "/consistency", icon: GitBranch },

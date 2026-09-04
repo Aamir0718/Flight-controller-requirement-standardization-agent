@@ -83,6 +83,27 @@ export const apiService = {
     return data;
   },
 
+  /** Sends only the given requirement ids to the LLM (one row's Generate
+   * button, or Select All + Generate). Runs in the background on the
+   * server -- poll getRunRequirements() and watch each id's own `status`
+   * flip analyzed -> generating -> generated/failed. */
+  async generateRequirements(runId: number, requirementIds: number[]): Promise<{ status: string; requirement_ids: number[] }> {
+    const { data } = await apiClient.post(`/runs/${runId}/requirements/generate`, {
+      requirement_ids: requirementIds,
+    });
+    return data;
+  },
+
+  /** A human typed a replacement requirement themselves -- no LLM, just a
+   * deterministic re-score. Synchronous, returns the updated row. */
+  async editRequirement(runId: number, requirementId: number, recommendedText: string): Promise<Requirement> {
+    const { data } = await apiClient.put<Requirement>(
+      `/runs/${runId}/requirements/${requirementId}`,
+      { recommended_text: recommendedText }
+    );
+    return data;
+  },
+
   async getRunConsistency(runId: number): Promise<ConsistencyResponse> {
     const { data } = await apiClient.get<ConsistencyResponse>(`/runs/${runId}/consistency`);
     return data;

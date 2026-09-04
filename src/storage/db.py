@@ -68,7 +68,10 @@ CREATE TABLE IF NOT EXISTS requirements (
     vague_term_suggestions_json TEXT NOT NULL,
     compliance_threshold REAL NOT NULL,
     needs_human_review INTEGER NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'analyzed',
+    violations_json TEXT NOT NULL DEFAULT '[]',
+    error_message TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requirement_relationships (
@@ -102,6 +105,45 @@ def resolve_db_path(db_path: str | Path | None = None) -> Path:
     return configured_path if configured_path.is_absolute() else _REPO_ROOT / configured_path
 
 
+# Columns added to `requirements` after its original CREATE TABLE shipped.
+# `CREATE TABLE IF NOT EXISTS` never alters an existing table, so a
+# database file created before this list existed needs these added
+# explicitly -- see _migrate_schema() below. (column, DDL type+default)
+_REQUIREMENTS_MIGRATIONS = [
+    ("status", "TEXT NOT NULL DEFAULT 'analyzed'"),
+    ("violations_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("error_message", "TEXT"),
+]
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Adds any column in _REQUIREMENTS_MIGRATIONS that an existing
+    database file predates. A fresh database already has every column via
+    _SCHEMA's CREATE TABLE, so this is a no-op for it -- existing() just
+    comes back non-empty and every ALTER TABLE is skipped."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(requirements)").fetchall()}
+    for column, ddl in _REQUIREMENTS_MIGRATIONS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE requirements ADD COLUMN {column} {ddl}")
+
+    # ADD COLUMN's DEFAULT 'analyzed' is right for a row that genuinely
+    # never reached the LLM (candidates=[] and recommended_index=-1 --
+    # which is also exactly what a pre-this-change RejectNonEars row looks
+    # like, so "analyzed" is still the correct read for those). But a
+    # pre-existing row that DID go through the old one-shot pipeline and
+    # got real LLM candidates would otherwise show as "analyzed" (not yet
+    # generated) when it's actually already done -- backfill those.
+    # Unconditional (not just right after adding the column) and cheap:
+    # it only ever touches rows currently mismarked this way, so it's a
+    # no-op once the data's correct, and self-heals the live database if
+    # it was ever backfilled wrong by an earlier version of this function.
+    conn.execute(
+        "UPDATE requirements SET status = 'generated' "
+        "WHERE status = 'analyzed' AND (recommended_index >= 0 OR candidates_json != '[]')"
+    )
+    conn.commit()
+
+
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     """Opens the SQLite database, creating the file and schema if this is
     the first run. No server, no network, no external setup step -- the
@@ -114,6 +156,7 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate_schema(conn)
     return conn
 
 
@@ -206,12 +249,15 @@ def set_run_total_requirements(conn: sqlite3.Connection, run_id: int, total: int
 
 
 def save_requirement(conn: sqlite3.Connection, run_id: int, sequence_in_run: int, result: dict) -> int:
-    """Persists one requirement's full pipeline trace. ``result`` is
-    exactly the dict src/pipeline/graph.py's run_requirement()/
-    run_workbook() return: original_text, source_location, rule_flags,
-    ears_pattern, candidates (all 3, with scores), recommended_index,
-    recommended_text, recommended_score, vague_term_suggestions,
-    compliance_threshold, needs_human_review.
+    """Persists one requirement's trace -- either analyze_requirement()'s
+    deterministic-only dict, generate_requirement()'s LLM-phase dict, or
+    (for tests/test_graph_integration.py and any other caller still using
+    the old one-shot pipeline) run_requirement()/run_workbook()'s combined
+    dict. All three shapes share original_text, source_location,
+    ears_pattern, rule_flags, candidates, recommended_index/text/score,
+    vague_term_suggestions, compliance_threshold, needs_human_review;
+    "status" and "violations" are optional (default "generated" and []
+    respectively) since the old combined shape has neither.
     """
     cursor = conn.execute(
         """
@@ -220,8 +266,8 @@ def save_requirement(conn: sqlite3.Connection, run_id: int, sequence_in_run: int
             ears_pattern_json, rule_flags_json, candidates_json,
             recommended_index, recommended_text, recommended_score,
             vague_term_suggestions_json, compliance_threshold,
-            needs_human_review, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            needs_human_review, created_at, status, violations_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -238,11 +284,91 @@ def save_requirement(conn: sqlite3.Connection, run_id: int, sequence_in_run: int
             result["compliance_threshold"],
             1 if result["needs_human_review"] else 0,
             _utcnow(),
+            result.get("status", "generated"),
+            json.dumps(result.get("violations", [])),
         ),
     )
     conn.execute("UPDATE runs SET requirement_count = requirement_count + 1 WHERE id = ?", (run_id,))
     conn.commit()
     return cursor.lastrowid
+
+
+# Valid requirements.status values. A row starts "analyzed" (deterministic
+# phase only, right after upload); a human moves it to "generating" ->
+# "generated"/"failed" by clicking Generate, or straight to "edited" by
+# typing a replacement themselves. Never moves backwards automatically.
+REQUIREMENT_STATUSES = ("analyzed", "generating", "generated", "edited", "failed")
+
+
+def update_requirement_status(
+    conn: sqlite3.Connection, requirement_id: int, status: str, error_message: str | None = None
+) -> None:
+    """Updates just a requirement's status (and optionally an error code) --
+    used to mark a row "generating" right before its LLM call starts, or
+    "failed" if that call raises, without touching any of its other
+    columns."""
+    if status not in REQUIREMENT_STATUSES:
+        raise ValueError(f"Unknown requirement status {status!r}; expected one of {REQUIREMENT_STATUSES}")
+    conn.execute(
+        "UPDATE requirements SET status = ?, error_message = ? WHERE id = ?",
+        (status, error_message, requirement_id),
+    )
+    conn.commit()
+
+
+def apply_generation_result(conn: sqlite3.Connection, requirement_id: int, result: dict) -> None:
+    """Overwrites one requirement row with generate_requirement()'s output
+    after a human clicked Generate for it: candidates, recommendation,
+    vague-term suggestions, needs_human_review, and status="generated".
+    original_text/source_location/rule_flags/ears_pattern's *structural*
+    fields are left as analyze_requirement() wrote them (ears_pattern
+    itself IS overwritten -- generate_requirement() may have rewritten its
+    "reason" to report a failed post-generation re-check)."""
+    conn.execute(
+        """
+        UPDATE requirements SET
+            ears_pattern_json = ?, candidates_json = ?, recommended_index = ?,
+            recommended_text = ?, recommended_score = ?,
+            vague_term_suggestions_json = ?, needs_human_review = ?,
+            status = 'generated', error_message = NULL
+        WHERE id = ?
+        """,
+        (
+            json.dumps(result["ears_pattern"]),
+            json.dumps(result["candidates"]),
+            result["recommended_index"],
+            result["recommended_text"],
+            result["recommended_score"],
+            json.dumps(result["vague_term_suggestions"]),
+            1 if result["needs_human_review"] else 0,
+            requirement_id,
+        ),
+    )
+    conn.commit()
+
+
+def apply_manual_edit(conn: sqlite3.Connection, requirement_id: int, edited_text: str) -> dict[str, Any]:
+    """A human typed a replacement requirement themselves (the Edit button,
+    no LLM involved). Re-scores the new text deterministically (full
+    INCOSE rulebook, same scorer used everywhere else) and stores it as
+    the recommendation: recommended_index=-1 signals "not one of the AI
+    candidates", needs_human_review=False since a human just wrote/approved
+    this text directly, status="edited". Returns the updated row.
+    """
+    from rules.incose_scorer import score_requirement
+
+    score_result = score_requirement(edited_text)
+    conn.execute(
+        """
+        UPDATE requirements SET
+            recommended_text = ?, recommended_index = -1, recommended_score = ?,
+            needs_human_review = 0, status = 'edited', error_message = NULL
+        WHERE id = ?
+        """,
+        (edited_text, score_result.score, requirement_id),
+    )
+    conn.commit()
+    return get_requirement(conn, requirement_id)
 
 
 def save_pipeline_run(
@@ -274,6 +400,7 @@ def list_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def _row_to_requirement(row: sqlite3.Row) -> dict[str, Any]:
+    columns = row.keys()
     return {
         "id": row["id"],
         "run_id": row["run_id"],
@@ -290,6 +417,12 @@ def _row_to_requirement(row: sqlite3.Row) -> dict[str, Any]:
         "compliance_threshold": row["compliance_threshold"],
         "needs_human_review": bool(row["needs_human_review"]),
         "created_at": row["created_at"],
+        # These three columns only exist on a migrated/fresh database (see
+        # _migrate_schema) -- guarded so a row read mid-migration, or by a
+        # connection that skipped it, doesn't KeyError.
+        "status": row["status"] if "status" in columns else "generated",
+        "violations": json.loads(row["violations_json"]) if "violations_json" in columns else [],
+        "error_message": row["error_message"] if "error_message" in columns else None,
     }
 
 
@@ -381,13 +514,20 @@ _NEEDS_REVIEW_FONT = "9C0006"
 _OK_FILL = "C6EFCE"             # light green -- matches Excel's built-in "Good" style
 _OK_FONT = "006100"
 
-_COLUMN_WIDTHS = [4, 24, 44, 16, 44, 14, 40, 40, 12, 44]
+_COLUMN_WIDTHS = [4, 24, 44, 16, 12, 44, 14, 40, 40, 12, 44, 44]
 _HEADERS = [
-    "#", "Source Location", "Original Requirement", "EARS Pattern",
+    "#", "Source Location", "Original Requirement", "EARS Pattern", "Status",
     "Recommended Requirement", "Compliance Score",
     "Alternate 1", "Alternate 2",
-    "Needs Review", "Suggestions",
+    "Needs Review", "Suggestions", "Violations",
 ]
+_STATUS_LABELS = {
+    "analyzed": "Not Generated",
+    "generating": "Generating...",
+    "generated": "AI Generated",
+    "edited": "Manually Edited",
+    "failed": "Generation Failed",
+}
 
 
 def _format_source_location(location: dict[str, Any]) -> str:
@@ -410,11 +550,25 @@ def _format_suggestions(suggestions: list[dict[str, str]]) -> str:
     return "; ".join(f"{s['term']}: {s['suggestion']}" for s in suggestions)
 
 
+def _format_violations(violations: list[dict[str, Any]]) -> str:
+    if not violations:
+        return "(none)"
+    return "; ".join(
+        f"{v['id']} ({v['title']}): {' '.join(v['reasons'])}" for v in violations
+    )
+
+
 def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str | Path) -> Path:
-    """Exports a completed run to a formatted .xlsx for human review: the
-    recommended rewrite, the 2 alternates, a Needs Review column, and a
-    Suggestions column (the recommended candidate's flagged vague terms),
-    color-highlighted per row (red = needs review, green = ready).
+    """Exports a run to a formatted .xlsx for human review, at whatever
+    point it's called -- right after upload with every row still
+    "analyzed" (deterministic-only, nothing generated yet) works exactly
+    as well as after some or all rows have been Generated or Edited. Each
+    row's Status column says which of those three it's in; color follows
+    needs_human_review (red = still needs attention, green = ready) which
+    is True for every "analyzed" row (nothing decided yet), then becomes
+    whatever generate_requirement()/apply_manual_edit() set it to once a
+    human acts on that row -- so a row genuinely turns green only once
+    it's actually been resolved, not just because it was included in a run.
     Also includes a consistency analysis sheet if relationships exist.
 
     Raises ValueError if ``run_id`` doesn't exist.
@@ -454,12 +608,14 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
             _format_source_location(req["source_location"]),
             req["original_text"],
             req["ears_pattern"].get("pattern", ""),
+            _STATUS_LABELS.get(req["status"], req["status"]),
             req["recommended_text"],
             req["recommended_score"],
             _format_candidate(alternates[0] if len(alternates) > 0 else None),
             _format_candidate(alternates[1] if len(alternates) > 1 else None),
             "Yes" if req["needs_human_review"] else "No",
             _format_suggestions(req["vague_term_suggestions"]),
+            _format_violations(req["violations"]),
         ])
 
         needs_review = req["needs_human_review"]
@@ -473,7 +629,7 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
             cell = sheet.cell(row=row_num, column=col_idx)
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if col_idx == 9:  # "Needs Review" column
+            if col_idx == 10:  # "Needs Review" column
                 cell.font = review_font
 
     for col_idx, width in enumerate(_COLUMN_WIDTHS, start=1):

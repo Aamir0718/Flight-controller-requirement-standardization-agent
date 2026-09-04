@@ -520,6 +520,165 @@ def _make_finalize_node(compliance_threshold: float):
 
 
 # ---------------------------------------------------------------------------
+# Two-phase entry points: analyze (deterministic, instant, whole workbook
+# at once) and generate (LLM, one requirement at a time, only when a human
+# asks for it). These call the same node functions above directly -- plain
+# sequential Python, not a LangGraph -- because the two phases are no
+# longer one linear run: the UI runs analyze_requirement() on upload for
+# every row, a human decides per row (or in bulk) whether to click
+# Generate or Edit it themselves, and generate_requirement() only ever
+# runs for a row a human explicitly asked for. build_graph()/run_requirement()
+# above still exist and are still exercised by tests/test_graph_integration.py,
+# but src/ui/api.py no longer drives the whole pipeline through them.
+# ---------------------------------------------------------------------------
+
+
+def analyze_requirement(
+    requirement_text: str,
+    source_location: dict | None = None,
+    incose_gate_threshold: float | None = None,
+    compliance_threshold: float | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict:
+    """Runs every deterministic node (Parse through IncoseCheck) on one
+    requirement and NEVER calls the LLM. Always computes the full INCOSE
+    score (every automatable rule, not just the ~25 IncoseCheck gates on)
+    against the original text -- regardless of whether the two gates would
+    pass or reject it -- so a human reviewing the analysis-only table
+    always sees a real score and a real violations list, not just a
+    pass/fail bit.
+
+    Returns the same public shape RejectNonEars/Finalize produce
+    (candidates=[], recommended_index=-1, recommended_text=original_text)
+    plus:
+      - "violations": every failed rule (id/title/category/reasons) from
+        the full INCOSE scoring, for a human to read before deciding
+        whether to Generate or Edit.
+      - "gate_passed": whether this requirement would clear BOTH pre-LLM
+        gates (ComplianceCheck then IncoseCheck) -- informational only,
+        shown to the human, never used to block generate_requirement()
+        below. Gating which requirements are worth an unattended Ollama
+        call made sense when the whole workbook ran through the LLM
+        automatically; it doesn't block anything now that a human clicks
+        Generate one row (or one selection) at a time.
+      - "status": "analyzed", for src/storage/db.py's status column.
+    """
+    resolved_settings = settings or get_settings()
+    if incose_gate_threshold is None:
+        incose_gate_threshold = resolved_settings.get("pipeline", {}).get(
+            "incose_gate_threshold", DEFAULT_INCOSE_GATE_THRESHOLD
+        )
+    if compliance_threshold is None:
+        compliance_threshold = resolved_settings.get("pipeline", {}).get(
+            "compliance_threshold", DEFAULT_COMPLIANCE_THRESHOLD
+        )
+
+    state: PipelineState = {"requirement_text": requirement_text}
+    if source_location is not None:
+        state["source_location"] = source_location
+
+    state.update(parse_node(state))
+    state.update(rule_flag_node(state))
+    state.update(classify_pattern_node(state))
+    state.update(abbreviation_check_node(state))
+    state.update(compliance_check_node(state))
+
+    if state["ears_compliant"]:
+        state.update(_make_incose_check_node(incose_gate_threshold)(state))
+        gate_passed = state["incose_compliant"]
+    else:
+        gate_passed = False
+
+    ears_pattern = dict(state["ears_classification"])
+    if not gate_passed:
+        gate_label = "EARS" if not state["ears_compliant"] else "INCOSE"
+        ears_pattern["reason"] = (
+            f"Not {gate_label} compliant: {state['rejection_reason']}"
+        )
+
+    # Full rulebook (no exclusions) -- this is the score/violations shown
+    # to a human, distinct from the gate's restricted scoring above.
+    full_score = score_requirement(state["original_text"])
+
+    return {
+        "original_text": state["original_text"],
+        "source_location": state["source_location"],
+        "rule_flags": state["rule_flags"],
+        "ears_pattern": ears_pattern,
+        "candidates": [],
+        "recommended_index": -1,
+        "recommended_text": state["original_text"],
+        "recommended_score": full_score.score,
+        "vague_term_suggestions": [],
+        "compliance_threshold": compliance_threshold,
+        "needs_human_review": True,
+        "violations": [asdict(f) for f in full_score.failed],
+        "gate_passed": gate_passed,
+        "status": "analyzed",
+    }
+
+
+def generate_requirement(
+    analyzed: dict,
+    client: LocalLLMClient,
+    compliance_threshold: float | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict:
+    """The LLM phase for ONE requirement, run only when a human clicks
+    Generate for it. ``analyzed`` is analyze_requirement()'s (or a stored
+    requirement row's) dict -- only original_text, rule_flags, and
+    ears_pattern are read from it; nothing here re-runs the deterministic
+    gates.
+
+    After Finalize picks a recommended candidate, the LLM's own output is
+    re-checked against BOTH the EARS classifier and the full INCOSE
+    rulebook -- recommender.py's ranking already prefers a compliant
+    candidate when one exists, but a candidate can still win the ranking
+    (best of a bad set) without actually being EARS-structured or without
+    clearing the INCOSE score a human would expect. When that happens,
+    needs_human_review is forced True and the reason names which re-check
+    failed, rather than silently presenting non-compliant LLM output as a
+    finished answer.
+    """
+    resolved_settings = settings or get_settings()
+    if compliance_threshold is None:
+        compliance_threshold = resolved_settings.get("pipeline", {}).get(
+            "compliance_threshold", DEFAULT_COMPLIANCE_THRESHOLD
+        )
+
+    state: PipelineState = {
+        "original_text": analyzed["original_text"],
+        "source_location": analyzed.get("source_location") or {"source": "inline"},
+        "rule_flags": analyzed["rule_flags"],
+        "ears_classification": analyzed["ears_pattern"],
+    }
+    state.update(_make_generate_candidates_node(client)(state))
+    state.update(score_and_recommend_node(state))
+    finalize_output = _make_finalize_node(compliance_threshold)(state)
+    result = dict(finalize_output["result"])
+
+    recheck_pattern = classify_ears_pattern(result["recommended_text"])
+    recheck_score = score_requirement(result["recommended_text"])
+    llm_recheck_passed = (
+        recheck_pattern.pattern != UNCLEAR_LABEL and recheck_score.score >= compliance_threshold
+    )
+    if not llm_recheck_passed:
+        result["needs_human_review"] = True
+        if recheck_pattern.pattern == UNCLEAR_LABEL:
+            recheck_reason = f"LLM output failed EARS re-check: {recheck_pattern.reason}"
+        else:
+            recheck_reason = (
+                f"LLM output failed INCOSE re-check: score {recheck_score.score:.1f}/100 "
+                f"(threshold {compliance_threshold:.1f})"
+            )
+        result["ears_pattern"] = {**result["ears_pattern"], "reason": recheck_reason}
+
+    result["llm_recheck_passed"] = llm_recheck_passed
+    result["status"] = "generated"
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Graph assembly
 # ---------------------------------------------------------------------------
 
