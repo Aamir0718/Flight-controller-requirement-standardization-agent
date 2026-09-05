@@ -444,7 +444,72 @@ class TestSchemaMigration:
         # despite already having a real candidate and recommended_index.
         assert fetched[0]["status"] == "generated"
         assert fetched[0]["violations"] == []
+        # accurate_score_status/accurate_score/accurate_violations/
+        # accurate_score_error_message are newer still than status/
+        # violations_json -- same migration guard must backfill them too.
+        assert fetched[0]["accurate_score_status"] == "not_computed"
+        assert fetched[0]["accurate_score"] is None
+        assert fetched[0]["accurate_violations"] == []
+        assert fetched[0]["accurate_score_error_message"] is None
         conn.close()
+
+
+class TestAccurateScoreStorage:
+    """src/storage/db.py's start_accurate_score/save_accurate_score/
+    fail_accurate_score -- the on-demand 42-rule score's persistence, kept
+    entirely separate from the always-computed 28-rule
+    recommended_score/violations."""
+
+    def test_defaults_to_not_computed_for_a_fresh_row(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["accurate_score_status"] == "not_computed"
+        assert fetched["accurate_score"] is None
+        assert fetched["accurate_violations"] == []
+
+    def test_start_accurate_score_marks_computing(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        db.start_accurate_score(conn, req_id)
+        assert db.get_requirement(conn, req_id)["accurate_score_status"] == "computing"
+
+    def test_save_accurate_score_stores_score_and_violations(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        db.start_accurate_score(conn, req_id)
+        violations = [{"id": "R3", "title": "Appropriate Subject-Verb", "category": "Accuracy", "reasons": ["x"]}]
+
+        updated = db.save_accurate_score(conn, req_id, 95.2, violations)
+
+        assert updated["accurate_score_status"] == "done"
+        assert updated["accurate_score"] == 95.2
+        assert updated["accurate_violations"] == violations
+        assert updated["accurate_score_error_message"] is None
+        # the original 28-rule score is completely untouched
+        assert updated["recommended_score"] == _analyzed_result()["recommended_score"]
+
+    def test_fail_accurate_score_records_status_and_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        db.start_accurate_score(conn, req_id)
+
+        db.fail_accurate_score(conn, req_id, "AI_SERVICE_UNAVAILABLE")
+
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["accurate_score_status"] == "failed"
+        assert fetched["accurate_score_error_message"] == "AI_SERVICE_UNAVAILABLE"
+
+    def test_start_accurate_score_clears_a_previous_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        req_id = db.save_requirement(conn, run_id, 0, _analyzed_result())
+        db.fail_accurate_score(conn, req_id, "AI_SERVICE_UNAVAILABLE")
+
+        db.start_accurate_score(conn, req_id)
+
+        fetched = db.get_requirement(conn, req_id)
+        assert fetched["accurate_score_status"] == "computing"
+        assert fetched["accurate_score_error_message"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +540,8 @@ class TestExcelExport:
         headers = [cell.value for cell in ws[1]]
         assert headers == [
             "#", "Source Location", "Original Requirement", "EARS Pattern", "Status",
-            "Recommended Requirement", "Compliance Score",
+            "Recommended Requirement", "Compliance Score (28 automatable rules)",
+            "Accurate Score (42 rules, incl. AI-judged)",
             "Alternate 1", "Alternate 2", "Needs Review", "Suggestions", "Violations",
         ]
 
@@ -485,8 +551,8 @@ class TestExcelExport:
         ws = load_workbook(out_path).active
 
         recommended_cell = ws.cell(row=2, column=6).value
-        alt1_cell = ws.cell(row=2, column=8).value
-        alt2_cell = ws.cell(row=2, column=9).value
+        alt1_cell = ws.cell(row=2, column=9).value
+        alt2_cell = ws.cell(row=2, column=10).value
 
         assert "While in orbit" in recommended_cell  # candidate index 1's text
         # alternates are the two non-recommended candidates, with their scores shown
@@ -509,8 +575,8 @@ class TestExcelExport:
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        assert ws.cell(row=2, column=10).value == "Yes"
-        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert ws.cell(row=2, column=11).value == "Yes"
+        fill_rgb = ws.cell(row=2, column=11).fill.start_color.rgb
         assert fill_rgb.endswith(db._NEEDS_REVIEW_FILL)
 
     def test_needs_review_column_and_row_color_for_clean_requirement(self, conn, tmp_path):
@@ -518,8 +584,8 @@ class TestExcelExport:
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
 
-        assert ws.cell(row=2, column=10).value == "No"
-        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert ws.cell(row=2, column=11).value == "No"
+        fill_rgb = ws.cell(row=2, column=11).fill.start_color.rgb
         assert fill_rgb.endswith(db._OK_FILL)
 
     def test_analyzed_but_not_yet_generated_requirement_is_red(self, conn, tmp_path):
@@ -533,8 +599,8 @@ class TestExcelExport:
         ws = load_workbook(out_path).active
 
         assert ws.cell(row=2, column=5).value == db._STATUS_LABELS["analyzed"]
-        assert ws.cell(row=2, column=10).value == "Yes"
-        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert ws.cell(row=2, column=11).value == "Yes"
+        fill_rgb = ws.cell(row=2, column=11).fill.start_color.rgb
         assert fill_rgb.endswith(db._NEEDS_REVIEW_FILL)
 
     def test_edited_requirement_is_green(self, conn, tmp_path):
@@ -545,8 +611,8 @@ class TestExcelExport:
         ws = load_workbook(out_path).active
 
         assert ws.cell(row=2, column=5).value == db._STATUS_LABELS["edited"]
-        assert ws.cell(row=2, column=10).value == "No"
-        fill_rgb = ws.cell(row=2, column=10).fill.start_color.rgb
+        assert ws.cell(row=2, column=11).value == "No"
+        fill_rgb = ws.cell(row=2, column=11).fill.start_color.rgb
         assert fill_rgb.endswith(db._OK_FILL)
 
     def test_entire_row_is_color_highlighted_not_just_one_cell(self, conn, tmp_path):
@@ -567,26 +633,26 @@ class TestExcelExport:
         )
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=11).value == "continuously: specify a sampling rate in Hz"
+        assert ws.cell(row=2, column=12).value == "continuously: specify a sampling rate in Hz"
 
     def test_empty_suggestions_render_as_none_placeholder(self, conn, tmp_path):
         run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result(vague_term_suggestions=[])])
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=11).value == "(none)"
+        assert ws.cell(row=2, column=12).value == "(none)"
 
     def test_violations_column_lists_rule_id_title_and_reason(self, conn, tmp_path):
         run_id = db.create_run(conn, file_name="a.xlsx")
         db.save_requirement(conn, run_id, 0, _analyzed_result())
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=12).value == "R7 (Vague Terms): x"
+        assert ws.cell(row=2, column=13).value == "R7 (Vague Terms): x"
 
     def test_empty_violations_render_as_none_placeholder(self, conn, tmp_path):
         run_id = db.save_pipeline_run(conn, file_name="a.xlsx", results=[_result()])
         out_path = db.export_run_to_excel(conn, run_id, tmp_path / "out.xlsx")
         ws = load_workbook(out_path).active
-        assert ws.cell(row=2, column=12).value == "(none)"
+        assert ws.cell(row=2, column=13).value == "(none)"
 
     def test_source_location_from_a_real_spreadsheet_cell_is_formatted_as_sheet_and_cell(self, conn, tmp_path):
         location = {

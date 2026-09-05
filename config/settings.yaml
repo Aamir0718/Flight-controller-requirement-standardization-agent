@@ -10,15 +10,18 @@
 # except the Generate button and consistency's contradiction check) never
 # depends on this and keeps working even when this endpoint is down.
 llm:
-  # DRDO-internal vLLM server. VERIFY before relying on this: an IPv4
-  # address needs 4 dot-separated numbers and this one only has 3 --
-  # confirm the exact address (e.g. `curl http://<address>/v1/models`
-  # from this machine) rather than trusting it as typed here.
-  base_url: "http://80.0.24:8001/v1"
+  # DRDO-internal vLLM server. Previously "http://80.0.24:8001/v1", which
+  # was missing an octet (only 3 dot-separated numbers, not a valid IPv4
+  # address) -- corrected to the 4-octet address from the guide's own
+  # reference script (LetMeKnow.py). Still worth a one-time sanity check
+  # with `curl http://80.1.0.24:8001/v1/models` from this machine before
+  # relying on it in production.
+  base_url: "http://80.1.0.24:8001/v1"
   # Must exactly match the model name the vLLM server reports at
-  # GET {base_url}/models -- verify with the curl command above rather
-  # than assuming this string is exactly right.
-  model: "gemma4:26B"
+  # GET {base_url}/models. Updated to "gemma4-26B-A4B-it" per the guide's
+  # reference script -- verify with the curl command above rather than
+  # assuming this string is exactly right.
+  model: "gemma4-26B-A4B-it"
   # Empty = no Authorization header sent at all. Set this only if the
   # server starts requiring a bearer token.
   api_key: ""

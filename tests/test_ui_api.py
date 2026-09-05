@@ -58,6 +58,37 @@ class _FakeCrashesMidGenerationClient:
         raise RuntimeError("simulated model crash")
 
 
+class _FakeAccurateScoreClient:
+    """Only implements generate_json (what src/rules/incose_ai_scorer.py's
+    score_non_automatable_rules() calls) -- fails every judged rule whose id
+    is in FAIL_IDS, passes the rest, so tests can check both branches."""
+    FAIL_IDS: set[str] = set()
+
+    def check_reachable(self):
+        pass
+
+    def generate_json(self, system_prompt, user_prompt, schema, required_keys, *, temperature=None, seed=None):
+        from rules.incose_ai_scorer import _SET_OR_DOCUMENT_LEVEL_RULE_IDS, _non_automatable_rules
+
+        judged_ids = [
+            r["id"] for r in _non_automatable_rules() if r["id"] not in _SET_OR_DOCUMENT_LEVEL_RULE_IDS
+        ]
+        return {
+            "rule_results": [
+                {"id": rid, "passed": rid not in self.FAIL_IDS, "reason": "test reason"}
+                for rid in judged_ids
+            ]
+        }
+
+
+class _FakeAccurateScoreCrashClient:
+    def check_reachable(self):
+        pass
+
+    def generate_json(self, system_prompt, user_prompt, schema, required_keys, *, temperature=None, seed=None):
+        raise RuntimeError("simulated model crash")
+
+
 @pytest.fixture
 def api_env(tmp_path, monkeypatch):
     """Points api.py's DB connection, upload dir, and export dir at
@@ -228,6 +259,92 @@ class TestGenerateRequirements:
         run_id = _upload(client).json()["run_id"]
         response = client.post(f"/runs/{run_id}/requirements/generate", json={"requirement_ids": []})
         assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /runs/{run_id}/requirements/{requirement_id}/accurate-score -- the
+# opt-in 42-rule score (src/rules/incose_ai_scorer.py). Never automatic,
+# only for the one requirement id a human explicitly asked about.
+# ---------------------------------------------------------------------------
+
+
+class TestAccurateScore:
+    def test_happy_path_computes_combined_42_rule_score(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeAccurateScoreClient)
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+
+        response = client.post(f"/runs/{run_id}/requirements/{target_id}/accurate-score")
+        assert response.status_code == 200
+        assert response.json()["status"] == "computing"
+
+        updated = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert updated["accurate_score_status"] == "done"
+        assert updated["accurate_score"] is not None
+        # every judged rule passed -> only the deterministic score's own
+        # violations (if any) should show up, none from the AI-judged half
+        assert all(v["id"] not in ("R3", "R12", "R13") for v in updated["accurate_violations"])
+
+    def test_failed_ai_rule_is_included_in_accurate_violations(self, api_env, monkeypatch):
+        client, _ = api_env
+        fake = type("Fake", (_FakeAccurateScoreClient,), {"FAIL_IDS": {"R3"}})
+        monkeypatch.setattr(api, "LocalLLMClient", fake)
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+
+        client.post(f"/runs/{run_id}/requirements/{target_id}/accurate-score")
+
+        updated = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert updated["accurate_score_status"] == "done"
+        assert any(v["id"] == "R3" for v in updated["accurate_violations"])
+        # combined score is strictly less than a full-marks deterministic
+        # score, since at least one of the 42 rules failed
+        assert updated["accurate_score"] < 100.0
+
+    def test_llm_unreachable_marks_accurate_score_failed(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeUnreachableClient)
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+
+        client.post(f"/runs/{run_id}/requirements/{target_id}/accurate-score")
+
+        updated = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert updated["accurate_score_status"] == "failed"
+        assert updated["accurate_score_error_message"] == api.AI_SERVICE_UNAVAILABLE
+        # the default 28-rule score must be completely unaffected
+        assert updated["recommended_score"] is not None
+
+    def test_llm_crash_marks_accurate_score_failed(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "LocalLLMClient", _FakeAccurateScoreCrashClient)
+        run_id = _upload(client).json()["run_id"]
+        target_id = client.get(f"/runs/{run_id}/requirements").json()[0]["id"]
+
+        client.post(f"/runs/{run_id}/requirements/{target_id}/accurate-score")
+
+        updated = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert updated["accurate_score_status"] == "failed"
+        assert updated["accurate_score_error_message"] is not None
+
+    def test_unknown_run_id_returns_404(self, api_env):
+        client, _ = api_env
+        response = client.post("/runs/999/requirements/1/accurate-score")
+        assert response.status_code == 404
+
+    def test_unknown_requirement_id_returns_404(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        response = client.post(f"/runs/{run_id}/requirements/999999/accurate-score")
+        assert response.status_code == 404
+
+    def test_not_computed_by_default_after_upload(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+        req = client.get(f"/runs/{run_id}/requirements").json()[0]
+        assert req["accurate_score_status"] == "not_computed"
+        assert req["accurate_score"] is None
 
 
 # ---------------------------------------------------------------------------

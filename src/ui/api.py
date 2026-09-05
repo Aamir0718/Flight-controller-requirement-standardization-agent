@@ -45,6 +45,7 @@ from consistency.analyzer import ConsistencyAnalyzer
 from ingestion.parser import parse_workbook
 from llm.local_llm_client import LocalLLMClient, LLMUnavailableError
 from pipeline.graph import analyze_requirement, generate_requirement
+from rules.incose_ai_scorer import score_accurate
 from config import get_settings
 from ui import progress
 
@@ -224,6 +225,54 @@ def _generate_selected(run_id: int, requirement_ids: list[int]) -> None:
                 import traceback
                 traceback.print_exc()
                 db.update_requirement_status(conn, req_id, "failed", error_message=friendly_code)
+    finally:
+        conn.close()
+
+
+def _compute_accurate_score(run_id: int, requirement_id: int) -> None:
+    """Background task for POST /runs/{run_id}/requirements/{id}/accurate-score.
+
+    Computes the on-demand 42-rule score for exactly the ONE requirement a
+    human clicked "Check Accurate Score" for -- the existing 28-rule
+    deterministic score (src/rules/incose_scorer.py) plus an LLM verdict on
+    the 14 rules that can't be checked mechanically (src/rules/
+    incose_ai_scorer.py). This never runs automatically or in bulk: it's a
+    real LLM call, made only for the one row a human explicitly asked
+    about, same "opt-in, one row at a time" spirit as Generate.
+
+    Scores whatever text is currently under review (requirement's
+    recommended_text -- the original text for an "analyzed"/not-yet-acted-
+    on row, or the generated/edited text once a human has acted on it),
+    not always the original submission, so the accurate score always
+    reflects what the human is actually looking at right now.
+    """
+    conn = db.connect()
+    try:
+        req = db.get_requirement(conn, requirement_id)
+        if req is None or req["run_id"] != run_id:
+            return
+
+        try:
+            client = LocalLLMClient()
+            client.check_reachable()
+        except LLMUnavailableError:
+            db.fail_accurate_score(conn, requirement_id, AI_SERVICE_UNAVAILABLE)
+            return
+
+        db.start_accurate_score(conn, requirement_id)
+        try:
+            result = score_accurate(req["recommended_text"], client)
+            violations = (
+                [asdict(f) for f in result.deterministic.failed]
+                + [asdict(f) for f in result.ai.failed]
+            )
+            db.save_accurate_score(conn, requirement_id, result.combined_score, violations)
+        except Exception as exc:  # noqa: BLE001 -- must not crash the background task
+            friendly_code = _error_code_for_exception(exc) or AI_UNKNOWN_ERROR
+            print(f"Error computing accurate score for requirement {requirement_id} (run {run_id}): {exc}")
+            import traceback
+            traceback.print_exc()
+            db.fail_accurate_score(conn, requirement_id, friendly_code)
     finally:
         conn.close()
 
@@ -427,6 +476,37 @@ def edit_requirement(run_id: int, requirement_id: int, body: EditRequest) -> dic
         return db.apply_manual_edit(conn, requirement_id, body.recommended_text.strip())
     finally:
         conn.close()
+
+
+@app.post("/runs/{run_id}/requirements/{requirement_id}/accurate-score")
+def compute_accurate_score(
+    run_id: int, requirement_id: int, background_tasks: BackgroundTasks
+) -> dict:
+    """A human clicked "Check Accurate Score" for one requirement: the
+    default score every requirement gets automatically only covers the 28
+    automatable INCOSE rules (see src/rules/incose_scorer.py); this adds an
+    LLM judgement on the other 14 rules and combines both into a 42-rule
+    score (src/rules/incose_ai_scorer.py). Runs in the background exactly
+    like POST .../generate -- a real LLM call can take a while, so this
+    returns immediately with status "computing" and the client polls GET
+    /runs/{run_id}/requirements, watching this row's own
+    accurate_score_status flip to "done" or "failed".
+    """
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+        existing = db.get_requirement(conn, requirement_id)
+        if existing is None or existing["run_id"] != run_id:
+            raise HTTPException(
+                status_code=404, detail=f"No requirement with id {requirement_id} in run {run_id}"
+            )
+    finally:
+        conn.close()
+
+    background_tasks.add_task(_compute_accurate_score, run_id, requirement_id)
+    return {"run_id": run_id, "requirement_id": requirement_id, "status": "computing"}
 
 
 @app.get("/runs/{run_id}/download")

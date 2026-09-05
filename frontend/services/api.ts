@@ -104,6 +104,18 @@ export const apiService = {
     return data;
   },
 
+  /** A human clicked "Check Accurate Score" for one requirement -- runs in
+   * the background on the server (a real LLM call for the 14 rules that
+   * can't be checked mechanically), same poll-based pattern as
+   * generateRequirements(): watch this row's own `accurate_score_status`
+   * flip computing -> done/failed via getRunRequirements(). */
+  async computeAccurateScore(runId: number, requirementId: number): Promise<{ status: string }> {
+    const { data } = await apiClient.post(
+      `/runs/${runId}/requirements/${requirementId}/accurate-score`
+    );
+    return data;
+  },
+
   async getRunConsistency(runId: number): Promise<ConsistencyResponse> {
     const { data } = await apiClient.get<ConsistencyResponse>(`/runs/${runId}/consistency`);
     return data;
