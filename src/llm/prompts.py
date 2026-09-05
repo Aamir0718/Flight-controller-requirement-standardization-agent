@@ -146,6 +146,32 @@ def _format_incose_rules(rules: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_incose_score_block(score: float | None, violations: list[dict] | None) -> str:
+    """Grounds the model in the ORIGINAL text's actual deterministic INCOSE
+    score (src/rules/incose_scorer.py's score_requirement()) and its exact
+    failure reasons, rather than leaving the model to guess how non-
+    compliant the text is or invent its own reasons. ``score`` is None when
+    the caller didn't supply one (e.g. older call sites/tests) -- in that
+    case this block is omitted entirely rather than printed with a
+    misleading placeholder value.
+    """
+    if score is None:
+        return ""
+    lines = [
+        f"Deterministic INCOSE compliance score for the original text: {score:.1f}/100 "
+        "(computed over the 28 automatable INCOSE rules only -- 14 further rules need "
+        "human/domain judgement and are not part of this score)."
+    ]
+    if violations:
+        lines.append("Specific rule violations measured in the original text:")
+        for v in violations:
+            reasons = " ".join(v.get("reasons", []))
+            lines.append(f"- {v['id']} ({v['title']}): {reasons}")
+    else:
+        lines.append("No automatable INCOSE rule violations were measured in the original text.")
+    return "\n".join(lines)
+
+
 def select_fewshot_examples(
     flags: Iterable,
     max_examples: int = MAX_FEWSHOT_EXAMPLES,
@@ -209,6 +235,8 @@ def build_prompt(
     ears_pattern: str | None = None,
     max_fewshot_examples: int = MAX_FEWSHOT_EXAMPLES,
     candidate_index: int = 0,
+    incose_score: float | None = None,
+    incose_violations: list[dict] | None = None,
 ) -> PromptBundle:
     """Builds the system_prompt/user_prompt pair for one requirement.
 
@@ -219,6 +247,13 @@ def build_prompt(
     ``ears_pattern`` is the first-guess classification from
     src/rules/ears_classifier.py, if available; passed through as context
     only, not enforced.
+    ``incose_score``/``incose_violations`` are the ORIGINAL text's actual
+    deterministic INCOSE score and failed-rule list (src/rules/
+    incose_scorer.py's score_requirement()), if the caller has them --
+    grounds the model in the real, measured compliance gap instead of just
+    the detector-flag-driven rule subset below, which is a heuristic
+    approximation of the same thing. Optional (None/omitted) for call sites
+    that don't have a score computed yet.
     ``candidate_index`` is 0, 1, or 2 for the three candidate calls -- used
     to give call-specific instructions about structural variation.
     """
@@ -226,13 +261,15 @@ def build_prompt(
     selected_rules = select_relevant_rules(flags)
     fewshot_examples = select_fewshot_examples(flags, max_fewshot_examples)
 
-    system_prompt = "\n\n".join(
-        [
-            SYSTEM_PROMPT_HEADER.strip(),
-            _format_ears_patterns(ears_patterns),
-            _format_incose_rules(selected_rules),
-        ]
-    )
+    system_prompt_parts = [
+        SYSTEM_PROMPT_HEADER.strip(),
+        _format_ears_patterns(ears_patterns),
+        _format_incose_rules(selected_rules),
+    ]
+    score_block = _format_incose_score_block(incose_score, incose_violations)
+    if score_block:
+        system_prompt_parts.append(score_block)
+    system_prompt = "\n\n".join(system_prompt_parts)
 
     user_prompt_parts = []
     fewshot_block = _format_fewshot_examples(fewshot_examples)

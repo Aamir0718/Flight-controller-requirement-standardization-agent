@@ -184,6 +184,8 @@ class PipelineState(TypedDict, total=False):
     # --- GenerateCandidates ---
     candidates_raw: list[Candidate]
     llm_elapsed_ms: float
+    incose_score: float
+    incose_violations: list[dict]
 
     # --- ScoreAndRecommend ---
     recommendation: RecommendationResult
@@ -464,7 +466,12 @@ def _make_generate_candidates_node(client: LocalLLMClient):
         ears_pattern = state["ears_classification"]["pattern"]
         llm_start = time.perf_counter()
         candidates = generate_candidates(
-            client, state["original_text"], flags=flags, ears_pattern=ears_pattern
+            client,
+            state["original_text"],
+            flags=flags,
+            ears_pattern=ears_pattern,
+            incose_score=state.get("incose_score"),
+            incose_violations=state.get("incose_violations"),
         )
         llm_elapsed_ms = (time.perf_counter() - llm_start) * 1000
         return {"candidates_raw": candidates, "llm_elapsed_ms": llm_elapsed_ms}
@@ -630,6 +637,14 @@ def generate_requirement(
     ears_pattern are read from it; nothing here re-runs the deterministic
     gates.
 
+    The original text's deterministic INCOSE score and failed-rule list are
+    (re-)computed fresh here, from analyzed["original_text"], rather than
+    trusted from analyzed["recommended_score"]/["violations"] -- those two
+    fields get overwritten with a *candidate's* score once a requirement has
+    already been generated once, so on a re-Generate they'd no longer
+    describe the original text at all. Recomputing is cheap (pure regex, no
+    LLM) and guarantees the prompt is always grounded in the real original.
+
     After Finalize picks a recommended candidate, the LLM's own output is
     re-checked against BOTH the EARS classifier and the full INCOSE
     rulebook -- recommender.py's ranking already prefers a compliant
@@ -646,11 +661,14 @@ def generate_requirement(
             "compliance_threshold", DEFAULT_COMPLIANCE_THRESHOLD
         )
 
+    original_score = score_requirement(analyzed["original_text"])
     state: PipelineState = {
         "original_text": analyzed["original_text"],
         "source_location": analyzed.get("source_location") or {"source": "inline"},
         "rule_flags": analyzed["rule_flags"],
         "ears_classification": analyzed["ears_pattern"],
+        "incose_score": original_score.score,
+        "incose_violations": [asdict(f) for f in original_score.failed],
     }
     state.update(_make_generate_candidates_node(client)(state))
     state.update(score_and_recommend_node(state))

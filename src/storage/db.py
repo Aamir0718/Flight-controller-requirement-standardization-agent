@@ -71,7 +71,11 @@ CREATE TABLE IF NOT EXISTS requirements (
     created_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'analyzed',
     violations_json TEXT NOT NULL DEFAULT '[]',
-    error_message TEXT
+    error_message TEXT,
+    accurate_score_status TEXT NOT NULL DEFAULT 'not_computed',
+    accurate_score REAL,
+    accurate_violations_json TEXT NOT NULL DEFAULT '[]',
+    accurate_score_error_message TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requirement_relationships (
@@ -113,6 +117,13 @@ _REQUIREMENTS_MIGRATIONS = [
     ("status", "TEXT NOT NULL DEFAULT 'analyzed'"),
     ("violations_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("error_message", "TEXT"),
+    # On-demand "accurate" (42-rule) scoring -- see src/rules/incose_ai_scorer.py.
+    # Every existing row predates this feature, so 'not_computed' is the
+    # correct default for all of them, same as a freshly-inserted row.
+    ("accurate_score_status", "TEXT NOT NULL DEFAULT 'not_computed'"),
+    ("accurate_score", "REAL"),
+    ("accurate_violations_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("accurate_score_error_message", "TEXT"),
 ]
 
 
@@ -371,6 +382,57 @@ def apply_manual_edit(conn: sqlite3.Connection, requirement_id: int, edited_text
     return get_requirement(conn, requirement_id)
 
 
+# Valid requirements.accurate_score_status values -- a row starts
+# "not_computed" (the default 28-rule score is all it has); a human's
+# "Check Accurate Score" click moves it to "computing" while the LLM call
+# for the 14 non-automatable rules is in flight, then "done" or "failed".
+ACCURATE_SCORE_STATUSES = ("not_computed", "computing", "done", "failed")
+
+
+def start_accurate_score(conn: sqlite3.Connection, requirement_id: int) -> None:
+    """Marks a row 'computing' right before its accurate-score LLM call
+    starts, mirroring update_requirement_status()'s 'generating' marker --
+    same reason: a client polling GET /runs/{run_id}/requirements sees live
+    per-row progress with no separate console/stage machinery."""
+    conn.execute(
+        "UPDATE requirements SET accurate_score_status = 'computing', "
+        "accurate_score_error_message = NULL WHERE id = ?",
+        (requirement_id,),
+    )
+    conn.commit()
+
+
+def save_accurate_score(
+    conn: sqlite3.Connection, requirement_id: int, score: float, violations: list[dict]
+) -> dict[str, Any]:
+    """Stores a completed src/rules/incose_ai_scorer.score_accurate() result
+    (the combined 42-rule score and every failed rule's id/title/category/
+    reasons) for one requirement. Returns the updated row."""
+    conn.execute(
+        """
+        UPDATE requirements SET
+            accurate_score_status = 'done', accurate_score = ?,
+            accurate_violations_json = ?, accurate_score_error_message = NULL
+        WHERE id = ?
+        """,
+        (score, json.dumps(violations), requirement_id),
+    )
+    conn.commit()
+    return get_requirement(conn, requirement_id)
+
+
+def fail_accurate_score(conn: sqlite3.Connection, requirement_id: int, error_message: str) -> None:
+    """Records that an accurate-score LLM call failed (endpoint unreachable,
+    bad response, etc.) -- same friendly-error-code convention as
+    update_requirement_status()'s 'failed' status for Generate."""
+    conn.execute(
+        "UPDATE requirements SET accurate_score_status = 'failed', "
+        "accurate_score_error_message = ? WHERE id = ?",
+        (error_message, requirement_id),
+    )
+    conn.commit()
+
+
 def save_pipeline_run(
     conn: sqlite3.Connection,
     file_name: str,
@@ -423,6 +485,13 @@ def _row_to_requirement(row: sqlite3.Row) -> dict[str, Any]:
         "status": row["status"] if "status" in columns else "generated",
         "violations": json.loads(row["violations_json"]) if "violations_json" in columns else [],
         "error_message": row["error_message"] if "error_message" in columns else None,
+        # On-demand 42-rule score (src/rules/incose_ai_scorer.py) -- absent
+        # ("not_computed"/None/[]) until a human clicks "Check Accurate
+        # Score" for this row. Same migrated-column guard as above.
+        "accurate_score_status": row["accurate_score_status"] if "accurate_score_status" in columns else "not_computed",
+        "accurate_score": row["accurate_score"] if "accurate_score" in columns else None,
+        "accurate_violations": json.loads(row["accurate_violations_json"]) if "accurate_violations_json" in columns else [],
+        "accurate_score_error_message": row["accurate_score_error_message"] if "accurate_score_error_message" in columns else None,
     }
 
 
@@ -514,10 +583,11 @@ _NEEDS_REVIEW_FONT = "9C0006"
 _OK_FILL = "C6EFCE"             # light green -- matches Excel's built-in "Good" style
 _OK_FONT = "006100"
 
-_COLUMN_WIDTHS = [4, 24, 44, 16, 12, 44, 14, 40, 40, 12, 44, 44]
+_COLUMN_WIDTHS = [4, 24, 44, 16, 12, 44, 18, 20, 40, 40, 12, 44, 44]
 _HEADERS = [
     "#", "Source Location", "Original Requirement", "EARS Pattern", "Status",
-    "Recommended Requirement", "Compliance Score",
+    "Recommended Requirement", "Compliance Score (28 automatable rules)",
+    "Accurate Score (42 rules, incl. AI-judged)",
     "Alternate 1", "Alternate 2",
     "Needs Review", "Suggestions", "Violations",
 ]
@@ -556,6 +626,16 @@ def _format_violations(violations: list[dict[str, Any]]) -> str:
     return "; ".join(
         f"{v['id']} ({v['title']}): {' '.join(v['reasons'])}" for v in violations
     )
+
+
+def _format_accurate_score(status: str, score: float | None) -> str:
+    if status == "done" and score is not None:
+        return f"{score:.1f}"
+    if status == "computing":
+        return "(computing...)"
+    if status == "failed":
+        return "(check failed -- see app)"
+    return "Not checked (click \"Check Accurate Score\" in the app)"
 
 
 def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str | Path) -> Path:
@@ -611,6 +691,7 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
             _STATUS_LABELS.get(req["status"], req["status"]),
             req["recommended_text"],
             req["recommended_score"],
+            _format_accurate_score(req["accurate_score_status"], req["accurate_score"]),
             _format_candidate(alternates[0] if len(alternates) > 0 else None),
             _format_candidate(alternates[1] if len(alternates) > 1 else None),
             "Yes" if req["needs_human_review"] else "No",
@@ -629,7 +710,7 @@ def export_run_to_excel(conn: sqlite3.Connection, run_id: int, output_path: str 
             cell = sheet.cell(row=row_num, column=col_idx)
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if col_idx == 10:  # "Needs Review" column
+            if col_idx == 11:  # "Needs Review" column
                 cell.font = review_font
 
     for col_idx, width in enumerate(_COLUMN_WIDTHS, start=1):

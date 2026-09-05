@@ -15,6 +15,8 @@ import {
   XCircle,
   Save,
   X,
+  Info,
+  ShieldCheck,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -49,6 +51,12 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   },
 };
 
+// Must match src/rules/ears_classifier.py's UNCLEAR_LABEL exactly -- that's
+// the one pattern value meaning "didn't confidently match a recognized EARS
+// template", which is what tells the reason box below whether to render as
+// an explanation (a real pattern matched) or a rejection (it didn't).
+const EARS_UNCLEAR_LABEL = "Unclear — needs LLM.";
+
 function ReviewContent() {
   const { activeRunId } = useActiveRun();
   const queryClient = useQueryClient();
@@ -63,11 +71,16 @@ function ReviewContent() {
     queryKey: ["requirements", activeRunId],
     queryFn: () => apiService.getRunRequirements(activeRunId!),
     enabled: !!activeRunId,
-    // Live per-row progress: while anything is mid-generation, the status
-    // column itself IS the progress indicator -- no separate console.
+    // Live per-row progress: while anything is mid-generation OR mid
+    // accurate-score computation, the status column IS the progress
+    // indicator -- no separate console.
     refetchInterval: (query) => {
       const rows = query.state.data as Requirement[] | undefined;
-      return rows?.some((r) => r.status === "generating") ? 1200 : false;
+      return rows?.some(
+        (r) => r.status === "generating" || r.accurate_score_status === "computing"
+      )
+        ? 1200
+        : false;
     },
   });
 
@@ -85,6 +98,18 @@ function ReviewContent() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["requirements", activeRunId] });
       setEditingId(null);
+    },
+  });
+
+  // "Check Accurate Score" -- an opt-in, per-requirement LLM call that adds
+  // the 14 non-mechanically-checkable INCOSE rules on top of the default
+  // 28-rule score (src/rules/incose_ai_scorer.py). Runs in the background
+  // on the server; the mutation just kicks it off, the refetchInterval
+  // above polls for the result via accurate_score_status.
+  const accurateScoreMutation = useMutation({
+    mutationFn: (id: number) => apiService.computeAccurateScore(activeRunId!, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["requirements", activeRunId] });
     },
   });
 
@@ -299,8 +324,11 @@ function ReviewContent() {
                       {isGenerating && <Loader2 className="w-3 h-3 animate-spin" />}
                       {badge.label}
                     </span>
-                    <span className="px-2.5 py-1 rounded-full bg-[#142036] text-[#F5F7FA] border border-[#243244] text-xs font-mono font-bold">
-                      INCOSE: {req.recommended_score.toFixed(1)}
+                    <span
+                      className="px-2.5 py-1 rounded-full bg-[#142036] text-[#F5F7FA] border border-[#243244] text-xs font-mono font-bold"
+                      title="Deterministic score over the 28 automatable INCOSE rules only -- click &quot;Check Accurate Score&quot; below to also include the 14 rules that need AI/human judgement."
+                    >
+                      INCOSE: {req.recommended_score.toFixed(1)} (28 rules)
                     </span>
                   </div>
                 </div>
@@ -323,7 +351,7 @@ function ReviewContent() {
                     rulebook scoring. */}
                 <div className="space-y-1.5">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[#8FA3BF]">
-                    INCOSE Violations (Original Text)
+                    INCOSE Violations (Original Text -- 28 automatable rules)
                   </span>
                   <div className="flex flex-wrap gap-2">
                     {req.violations && req.violations.length > 0 ? (
@@ -348,16 +376,97 @@ function ReviewContent() {
                   </div>
                 </div>
 
-                {/* A rejection/failure/recheck reason, whenever
-                    ears_pattern.reason carries one -- EARS/INCOSE gate
-                    rejection at analysis time, a generation failure, or
-                    the LLM's own output failing its post-generation
-                    recheck (src/pipeline/graph.py's generate_requirement()). */}
-                {req.needs_human_review && req.ears_pattern?.reason && (
-                  <div className="p-3.5 rounded-xl bg-[#FF4D4F]/10 border border-[#FF4D4F]/30 flex items-start gap-2.5">
-                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-[#FF4D4F] mt-0.5" />
-                    <p className="text-xs text-[#FF4D4F] leading-relaxed font-mono">{req.ears_pattern.reason}</p>
+                {/* On-demand 42-rule "accurate" score -- the 28-rule score
+                    above is always free/instant/deterministic; this adds an
+                    LLM judgement on the other 14 rules (src/rules/
+                    incose_ai_scorer.py), only when a human explicitly asks
+                    for it (real LLM call, not run automatically). */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#8FA3BF]">
+                      Accurate INCOSE Score (all 42 rules, incl. AI-judged)
+                    </span>
+                    {req.accurate_score_status !== "computing" && (
+                      <button
+                        onClick={() => accurateScoreMutation.mutate(reqId)}
+                        disabled={accurateScoreMutation.isPending}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#8B5CF6]/30 bg-[#8B5CF6]/10 text-[#8B5CF6] text-xs font-semibold hover:bg-[#8B5CF6]/20 transition disabled:opacity-50"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        {req.accurate_score_status === "done" ? "Re-check Accurate Score" : "Check Accurate Score"}
+                      </button>
+                    )}
                   </div>
+
+                  {req.accurate_score_status === "not_computed" && (
+                    <p className="text-xs text-[#8FA3BF] italic">
+                      Not checked yet -- the 28-rule score above is all that's shown by default. This
+                      makes one LLM call to judge the 14 rules that can't be checked mechanically.
+                    </p>
+                  )}
+                  {req.accurate_score_status === "computing" && (
+                    <p className="text-xs text-[#1EA7FF] flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Asking the AI to judge the remaining 14 rules…
+                    </p>
+                  )}
+                  {req.accurate_score_status === "failed" && (
+                    <p className="text-xs text-[#FF4D4F]">
+                      {describeAIError(req.accurate_score_error_message)}
+                    </p>
+                  )}
+                  {req.accurate_score_status === "done" && (
+                    <div className="space-y-1.5">
+                      <span className="px-2.5 py-1 rounded-full bg-[#8B5CF6]/15 text-[#8B5CF6] border border-[#8B5CF6]/30 text-xs font-mono font-bold inline-block">
+                        Accurate: {req.accurate_score?.toFixed(1)} / 100 (42 rules)
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {req.accurate_violations && req.accurate_violations.length > 0 ? (
+                          req.accurate_violations.map((v, i) => (
+                            <span
+                              key={i}
+                              className="px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-[#FFB300]/15 text-[#FFB300] border-[#FFB300]/30"
+                              title={v.reasons?.join(" ")}
+                            >
+                              <span>🟡</span>
+                              <span>
+                                {v.id} ({v.title})
+                              </span>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg border bg-[#00C853]/15 text-[#00C853] border-[#00C853]/30 text-xs font-semibold flex items-center gap-1.5">
+                            <span>🟢</span>
+                            <span>No violations found across all 42 rules</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* EARS classification reasoning -- always shown when
+                    ears_pattern.reason carries one, whether that's a
+                    successful match ("which pattern, and why") or a
+                    rejection ("why not"): EARS/INCOSE gate rejection at
+                    analysis time, a generation failure, or the LLM's own
+                    output failing its post-generation recheck
+                    (src/pipeline/graph.py's generate_requirement()). Not
+                    gated on needs_human_review -- that flag flips false
+                    once a good candidate is generated/finalized, but the
+                    reasoning behind the ORIGINAL text's classification is
+                    still worth showing then, not just while unresolved. */}
+                {req.ears_pattern?.reason && (
+                  req.ears_pattern.pattern === EARS_UNCLEAR_LABEL ? (
+                    <div className="p-3.5 rounded-xl bg-[#FF4D4F]/10 border border-[#FF4D4F]/30 flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0 text-[#FF4D4F] mt-0.5" />
+                      <p className="text-xs text-[#FF4D4F] leading-relaxed font-mono">{req.ears_pattern.reason}</p>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-[#1EA7FF]/10 border border-[#1EA7FF]/30 flex items-start gap-2.5">
+                      <Info className="w-4 h-4 flex-shrink-0 text-[#1EA7FF] mt-0.5" />
+                      <p className="text-xs text-[#1EA7FF] leading-relaxed font-mono">{req.ears_pattern.reason}</p>
+                    </div>
+                  )
                 )}
                 {status === "failed" && req.error_message && (
                   <div className="p-3.5 rounded-xl bg-[#FF4D4F]/10 border border-[#FF4D4F]/30 flex items-start gap-2.5">

@@ -42,6 +42,13 @@ export interface VagueTermSuggestion {
 // backwards automatically -- see src/storage/db.py's REQUIREMENT_STATUSES.
 export type RequirementStatus = "analyzed" | "generating" | "generated" | "edited" | "failed";
 
+// "not_computed" until a human clicks "Check Accurate Score" for this row
+// (see src/rules/incose_ai_scorer.py); "computing" while that one LLM call
+// is in flight, then "done"/"failed" -- same lifecycle shape as
+// RequirementStatus's generating -> generated/failed, just for this
+// separate, opt-in 42-rule score rather than the default 28-rule one.
+export type AccurateScoreStatus = "not_computed" | "computing" | "done" | "failed";
+
 export interface Requirement {
   id?: number | string;
   sequence_in_run: number;
@@ -59,6 +66,14 @@ export interface Requirement {
   status: RequirementStatus;
   violations: FailedRule[];
   error_message?: string | null;
+  // On-demand 42-rule score: recommended_score/violations above only ever
+  // cover the 28 automatable INCOSE rules -- these fields stay
+  // "not_computed"/null/[] until a human explicitly asks for the more
+  // expensive, LLM-assisted 42-rule check.
+  accurate_score_status: AccurateScoreStatus;
+  accurate_score?: number | null;
+  accurate_violations?: FailedRule[];
+  accurate_score_error_message?: string | null;
 }
 
 export interface Run {

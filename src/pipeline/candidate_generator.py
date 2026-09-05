@@ -56,10 +56,19 @@ def generate_candidates(
     flags: Iterable,
     ears_pattern: str | None = None,
     num_candidates: int = NUM_CANDIDATES,
+    incose_score: float | None = None,
+    incose_violations: list[dict] | None = None,
 ) -> list[Candidate]:
     """Builds one prompt for ``requirement_text`` (via build_prompt) and
     calls ``client`` ``num_candidates`` times against it, varying
     temperature/seed each call. Returns one Candidate per call, in order.
+
+    ``incose_score``/``incose_violations`` are the original text's
+    deterministic INCOSE score/failed-rules (src/rules/incose_scorer.py),
+    passed straight through to build_prompt() so every candidate call is
+    grounded in the actual measured compliance gap, not just the
+    detector-flag heuristic. Optional -- omit for call sites that don't
+    have a score computed yet.
 
     Raises whatever LocalLLMClient.generate_structured raises
     (LLMUnavailableError, LLMResponseError) -- a partial candidate set
@@ -74,7 +83,14 @@ def generate_candidates(
 
     def _generate_one(i: int) -> Candidate:
         # Build a fresh prompt for each candidate with call-specific instructions
-        bundle = build_prompt(requirement_text, flags, ears_pattern=ears_pattern, candidate_index=i)
+        bundle = build_prompt(
+            requirement_text,
+            flags,
+            ears_pattern=ears_pattern,
+            candidate_index=i,
+            incose_score=incose_score,
+            incose_violations=incose_violations,
+        )
         temperature = min(
             base_temperature + TEMPERATURE_OFFSETS[i % len(TEMPERATURE_OFFSETS)],
             MAX_TEMPERATURE,
