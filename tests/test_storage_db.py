@@ -451,6 +451,12 @@ class TestSchemaMigration:
         assert fetched[0]["accurate_score"] is None
         assert fetched[0]["accurate_violations"] == []
         assert fetched[0]["accurate_score_error_message"] is None
+        # The legacy `runs` table above predates consistency_analyzed_at/
+        # consistency_last_error too -- same ALTER-TABLE migration guard
+        # must add those without erroring or losing the row.
+        run = db.get_run(conn, 1)
+        assert run["consistency_analyzed_at"] is None
+        assert run["consistency_last_error"] is None
         conn.close()
 
 
@@ -510,6 +516,40 @@ class TestAccurateScoreStorage:
         fetched = db.get_requirement(conn, req_id)
         assert fetched["accurate_score_status"] == "computing"
         assert fetched["accurate_score_error_message"] is None
+
+
+class TestConsistencyAnalysisOutcome:
+    """db.record_consistency_analysis_outcome() -- lets a caller (src/ui/
+    api.py) tell "consistency analysis never ran for this run" apart from
+    "it ran and found nothing" apart from "it ran and crashed", which an
+    empty requirement_relationships table alone can't distinguish."""
+
+    def test_fresh_run_has_null_timestamps(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        run = db.get_run(conn, run_id)
+        assert run["consistency_analyzed_at"] is None
+        assert run["consistency_last_error"] is None
+
+    def test_successful_outcome_sets_timestamp_with_no_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.record_consistency_analysis_outcome(conn, run_id, error=None)
+        run = db.get_run(conn, run_id)
+        assert run["consistency_analyzed_at"] is not None
+        assert run["consistency_last_error"] is None
+
+    def test_failed_outcome_sets_both_timestamp_and_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.record_consistency_analysis_outcome(conn, run_id, error="boom")
+        run = db.get_run(conn, run_id)
+        assert run["consistency_analyzed_at"] is not None
+        assert run["consistency_last_error"] == "boom"
+
+    def test_a_later_success_clears_a_previous_error(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.record_consistency_analysis_outcome(conn, run_id, error="boom")
+        db.record_consistency_analysis_outcome(conn, run_id, error=None)
+        run = db.get_run(conn, run_id)
+        assert run["consistency_last_error"] is None
 
 
 # ---------------------------------------------------------------------------

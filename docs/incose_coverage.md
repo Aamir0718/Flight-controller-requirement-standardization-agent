@@ -75,8 +75,8 @@ and the remaining 12 have no automated coverage at all.
 
 R37 and R38 are automatable and checked pre-LLM, but deliberately **do not
 gate** `GenerateCandidates` the way `IncoseCheck` and `ComplianceCheck` do.
-A fixed allowlist of "known" acronyms (`data/rules/known_abbreviations.json`)
-can never keep up with a real, large requirement corpus — gating on it was
+A fixed allowlist of "known" acronyms (`data/rules/word_lists.xlsx`'s
+"acronyms" sheet) can never keep up with a real, large requirement corpus — gating on it was
 measured to wrongly reject ~14% of `data/golden/fewshot.json`'s 150 real
 examples (HVAC, PLC, ARINC, SCADA, ABS, GUI, ... none of them in any
 reasonable allowlist). So these two rules are surfaced as quality flags for

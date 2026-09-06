@@ -277,25 +277,42 @@ def _compute_accurate_score(run_id: int, requirement_id: int) -> None:
         conn.close()
 
 
-def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> bool:
+def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> dict:
     """Runs consistency analysis on all requirements in a run -- duplicate/
     similarity detection is pure embeddings (no LLM); contradiction
     detection needs the LLM endpoint and is skipped (not a failure) if
     it isn't reachable, checked once for the whole run, not once per pair
-    -- see ConsistencyAnalyzer._is_llm_reachable(). Failures here should
-    not fail the entire run - we log and continue.
+    -- see ConsistencyAnalyzer._is_llm_reachable().
 
-    Returns True if contradiction detection was skipped because the LLM
-    endpoint wasn't reachable (duplicate/similarity results are still
-    valid and saved either way) -- callers use this to tell the human
-    "duplicates and similar pairs were found; contradiction checking
-    needs the LLM endpoint reachable" instead of silently under-reporting
-    contradictions.
+    Returns a dict, never raises:
+      - "crashed": True if analyze_requirements() (or anything else here)
+        raised an exception. IMPORTANT: existing relationships were
+        already cleared by the time a crash can happen, so "crashed" means
+        "we genuinely don't know whether there are relationships", NOT
+        "there are none" -- callers must show this as a failure, never
+        silently present it as a clean zero-relationships result (that
+        would be reporting 100% consistency when the truth is "we don't
+        know", which is worse than reporting nothing).
+      - "error": the exception's str(), only set when crashed.
+      - "too_few_requirements": True for the real, non-error case of
+        fewer than 2 requirements to compare -- nothing to analyze, not a
+        failure.
+      - "contradiction_check_skipped": True if contradiction detection
+        specifically was skipped because the LLM endpoint was unreachable
+        (duplicate/similarity results are still complete and valid either
+        way) -- callers use this to tell the human "duplicates and
+        similar pairs were found; contradiction checking needs the LLM
+        endpoint reachable" instead of silently under-reporting
+        contradictions.
     """
     try:
         requirements = db.get_requirements_for_run(conn, run_id)
         if len(requirements) < 2:
-            return False  # Not enough requirements to analyze
+            db.record_consistency_analysis_outcome(conn, run_id, error=None)
+            return {
+                "crashed": False, "error": None,
+                "too_few_requirements": True, "contradiction_check_skipped": False,
+            }
 
         # Clear any existing relationships for this run to avoid stale data
         conn.execute("DELETE FROM requirement_relationships WHERE run_id = ?", (run_id,))
@@ -327,14 +344,26 @@ def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> bool:
             )
 
         print(f"Consistency analysis completed for run {run_id}: {len(result.relationships)} relationships found")
-        return result.contradiction_check_skipped
+        db.record_consistency_analysis_outcome(conn, run_id, error=None)
+        return {
+            "crashed": False, "error": None,
+            "too_few_requirements": False,
+            "contradiction_check_skipped": result.contradiction_check_skipped,
+        }
 
-    except Exception as exc:  # noqa: BLE001 -- consistency analysis failure should not fail the run
-        # Log the error but don't fail the entire run
+    except Exception as exc:  # noqa: BLE001 -- reported to the caller, not swallowed
+        # A crash here must never look like a clean "0 relationships
+        # found" -- log the full traceback for diagnosis, and hand the
+        # caller enough to tell the human this failed rather than
+        # silently presenting stale-cleared/empty results as 100% consistent.
         print(f"Consistency analysis failed for run {run_id}: {exc}")
         import traceback
         traceback.print_exc()
-        return False
+        db.record_consistency_analysis_outcome(conn, run_id, error=str(exc))
+        return {
+            "crashed": True, "error": str(exc),
+            "too_few_requirements": False, "contradiction_check_skipped": False,
+        }
 
 
 @app.post("/upload")
@@ -586,6 +615,13 @@ def get_run_consistency(run_id: int) -> dict:
             "total_requirements": run.get("total_requirements", 0),
             "summary": summary,
             "relationships": enriched_relationships,
+            # Distinguishes "consistency analysis has never been run for
+            # this run" (both None) from "it ran and found nothing" (set,
+            # consistency_last_error None) from "it ran and crashed" (both
+            # set) -- an empty relationships list alone can't tell those
+            # apart. See db.record_consistency_analysis_outcome().
+            "consistency_analyzed_at": run.get("consistency_analyzed_at"),
+            "consistency_last_error": run.get("consistency_last_error"),
         }
     finally:
         conn.close()
@@ -609,23 +645,44 @@ def reanalyze_consistency(run_id: int) -> dict:
         db.clear_requirement_relationships(conn, run_id)
 
         # Re-run consistency analysis
-        contradiction_check_skipped = _run_consistency_analysis(conn, run_id)
+        outcome = _run_consistency_analysis(conn, run_id)
 
         # Return updated results
         relationships = db.get_requirement_relationships(conn, run_id)
         summary = db.get_consistency_summary(conn, run_id)
 
-        message = (
-            "Consistency analysis completed, but contradiction detection was "
-            "skipped because the LLM endpoint is not reachable -- duplicate and "
-            "similarity results (no LLM needed) are still complete and accurate."
-            if contradiction_check_skipped
-            else "Consistency analysis completed"
-        )
+        # "crashed" MUST be reported as a failure, never dressed up as a
+        # clean zero-relationships result -- see _run_consistency_analysis's
+        # docstring for why. This is deliberately still a 200 response (the
+        # HTTP request itself succeeded; the analysis it triggered didn't) --
+        # the frontend checks "status" to tell the two apart.
+        if outcome["crashed"]:
+            status = "failed"
+            message = (
+                f"Consistency analysis failed and could not complete: {outcome['error']}. "
+                "The numbers below do NOT reflect a real result -- do not read this as "
+                "\"no relationships found\". Check the backend console log for the full "
+                "traceback."
+            )
+        elif outcome["too_few_requirements"]:
+            status = "too_few_requirements"
+            message = "Need at least 2 requirements to analyze consistency."
+        elif outcome["contradiction_check_skipped"]:
+            status = "completed"
+            message = (
+                "Consistency analysis completed, but contradiction detection was "
+                "skipped because the LLM endpoint is not reachable -- duplicate and "
+                "similarity results (no LLM needed) are still complete and accurate."
+            )
+        else:
+            status = "completed"
+            message = "Consistency analysis completed"
+
         return {
             "run_id": run_id,
+            "status": status,
             "message": message,
-            "contradiction_check_skipped": contradiction_check_skipped,
+            "contradiction_check_skipped": outcome["contradiction_check_skipped"],
             "summary": summary,
             "relationships_count": len(relationships),
         }

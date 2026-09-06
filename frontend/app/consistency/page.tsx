@@ -76,7 +76,7 @@ export default function ConsistencyPage() {
     if (!activeRunId) return;
     try {
       const result = await apiService.reanalyzeConsistency(activeRunId);
-      setLastMessage({ text: result.message, isWarning: result.contradiction_check_skipped });
+      setLastMessage({ text: result.message, isWarning: result.status !== "completed" });
       refetch();
     } catch (error: any) {
       console.error("Failed to reanalyze consistency:", error);
@@ -153,6 +153,17 @@ export default function ConsistencyPage() {
   const independentRatio = summary.independent / totalPairs;
   const consistencyScore = Math.round(independentRatio * 100);
 
+  // An empty relationships list alone can't tell "never analyzed" apart
+  // from "analyzed and genuinely found nothing" from "the last analysis
+  // crashed" -- consistency_analyzed_at/consistency_last_error (backend's
+  // src/storage/db.py) disambiguate. The score/summary cards below are
+  // only a real result in the "ok" case.
+  const analysisState: "never_run" | "failed" | "ok" = !consistencyData?.consistency_analyzed_at
+    ? "never_run"
+    : consistencyData.consistency_last_error
+    ? "failed"
+    : "ok";
+
   return (
     <div className="space-y-6 select-none">
       {/* Header */}
@@ -201,6 +212,30 @@ export default function ConsistencyPage() {
             <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
           )}
           <p className="leading-relaxed">{lastMessage.text}</p>
+        </div>
+      )}
+
+      {/* Persistent state banner -- unlike lastMessage above (only shown
+          right after clicking Re-analyze this session), this reflects
+          what's actually persisted for this run, so it still shows up on
+          a fresh page load/reload. */}
+      {analysisState === "never_run" && (
+        <div className="p-3.5 rounded-xl border flex items-start gap-2.5 text-xs bg-[#1EA7FF]/10 border-[#1EA7FF]/30 text-[#1EA7FF]">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            Not analyzed yet. The numbers below are placeholders, not a real result -- click
+            &quot;Re-analyze&quot; to check for duplicates, similar, and contradicting requirements.
+          </p>
+        </div>
+      )}
+      {analysisState === "failed" && (
+        <div className="p-3.5 rounded-xl border flex items-start gap-2.5 text-xs bg-[#FF4D4F]/10 border-[#FF4D4F]/30 text-[#FF4D4F]">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            The last consistency analysis failed: {consistencyData?.consistency_last_error}. The
+            numbers below do NOT reflect a real result -- do not read this as &quot;no
+            relationships found&quot;. Click &quot;Re-analyze&quot; to try again.
+          </p>
         </div>
       )}
 
@@ -266,11 +301,19 @@ export default function ConsistencyPage() {
             <span className="text-xs font-bold uppercase tracking-wider text-[#8FA3BF]">
               Consistency Score
             </span>
-            <div className="p-2 rounded-lg bg-[#00C853]/10 text-[#00C853]">
+            <div
+              className={`p-2 rounded-lg ${
+                analysisState === "ok" ? "bg-[#00C853]/10 text-[#00C853]" : "bg-[#8FA3BF]/10 text-[#8FA3BF]"
+              }`}
+            >
               <CheckCircle2 className="w-5 h-5" />
             </div>
           </div>
-          <div className="text-3xl font-bold text-[#00C853]">{consistencyScore}%</div>
+          {analysisState === "ok" ? (
+            <div className="text-3xl font-bold text-[#00C853]">{consistencyScore}%</div>
+          ) : (
+            <div className="text-lg font-bold text-[#8FA3BF]">Not available</div>
+          )}
         </div>
       </motion.div>
 
@@ -290,7 +333,11 @@ export default function ConsistencyPage() {
 
         {relationships.length === 0 ? (
           <div className="py-12 text-center text-[#8FA3BF] text-sm">
-            No relationships detected. All requirements appear independent.
+            {analysisState === "never_run"
+              ? 'Not analyzed yet -- click "Re-analyze" above to check for duplicates, similar, and contradicting requirements.'
+              : analysisState === "failed"
+              ? "The last analysis attempt failed -- see the banner above. This is not a real result."
+              : "No relationships detected. All requirements appear independent."}
           </div>
         ) : (
           <div className="overflow-x-auto">

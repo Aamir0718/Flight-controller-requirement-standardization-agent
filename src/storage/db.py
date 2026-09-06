@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS runs (
     requirement_count INTEGER NOT NULL DEFAULT 0,
     total_requirements INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
-    error_message TEXT
+    error_message TEXT,
+    consistency_analyzed_at TEXT,
+    consistency_last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requirements (
@@ -126,16 +128,32 @@ _REQUIREMENTS_MIGRATIONS = [
     ("accurate_score_error_message", "TEXT"),
 ]
 
+# Columns added to `runs` after its original CREATE TABLE shipped -- lets a
+# human (and the frontend) tell "consistency analysis was never run for
+# this run" apart from "it ran and genuinely found 0 relationships", which
+# look identical if all you can see is an empty relationships table. See
+# src/ui/api.py's _run_consistency_analysis()/record_consistency_analysis_outcome().
+_RUNS_MIGRATIONS = [
+    ("consistency_analyzed_at", "TEXT"),
+    ("consistency_last_error", "TEXT"),
+]
+
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Adds any column in _REQUIREMENTS_MIGRATIONS that an existing
-    database file predates. A fresh database already has every column via
-    _SCHEMA's CREATE TABLE, so this is a no-op for it -- existing() just
-    comes back non-empty and every ALTER TABLE is skipped."""
+    """Adds any column in _REQUIREMENTS_MIGRATIONS/_RUNS_MIGRATIONS that an
+    existing database file predates. A fresh database already has every
+    column via _SCHEMA's CREATE TABLE, so this is a no-op for it --
+    existing() just comes back non-empty and every ALTER TABLE is
+    skipped."""
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(requirements)").fetchall()}
     for column, ddl in _REQUIREMENTS_MIGRATIONS:
         if column not in existing:
             conn.execute(f"ALTER TABLE requirements ADD COLUMN {column} {ddl}")
+
+    existing_run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    for column, ddl in _RUNS_MIGRATIONS:
+        if column not in existing_run_columns:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {ddl}")
 
     # ADD COLUMN's DEFAULT 'analyzed' is right for a row that genuinely
     # never reached the LLM (candidates=[] and recommended_index=-1 --
@@ -246,6 +264,24 @@ def update_run_status(
         raise ValueError(f"Unknown run status {status!r}; expected one of {RUN_STATUSES}")
     conn.execute(
         "UPDATE runs SET status = ?, error_message = ? WHERE id = ?", (status, error_message, run_id)
+    )
+    conn.commit()
+
+
+def record_consistency_analysis_outcome(
+    conn: sqlite3.Connection, run_id: int, error: str | None
+) -> None:
+    """Records that a consistency-analysis attempt (src/ui/api.py's
+    _run_consistency_analysis()) just happened for this run, successfully
+    (``error`` is None) or not (``error`` is the failure reason). Sets
+    consistency_analyzed_at unconditionally -- even a failed attempt "was
+    attempted" -- so GET /runs/{run_id}/consistency can tell a human
+    "analysis has never run for this run" apart from "it ran and found
+    nothing" or "it ran and failed", which otherwise all look identical
+    (an empty requirement_relationships table)."""
+    conn.execute(
+        "UPDATE runs SET consistency_analyzed_at = ?, consistency_last_error = ? WHERE id = ?",
+        (_utcnow(), error, run_id),
     )
     conn.commit()
 

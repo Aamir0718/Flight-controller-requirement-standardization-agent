@@ -38,6 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from llm.local_llm_client import LocalLLMClient, LLMUnavailableError  # noqa: E402
+from pipeline.candidate_generator import MAX_ATTEMPTS  # noqa: E402
 from pipeline.graph import build_graph, run_requirement  # noqa: E402
 
 GOLDEN_DIR = REPO_ROOT / "data" / "golden"
@@ -138,8 +139,15 @@ def _is_well_formed(result: dict) -> list[str]:
         problems.append("rejected (0 candidates) but needs_human_review is not True")
 
     if not rejected:
-        if len(result["candidates"]) != 3:
-            problems.append(f"expected 3 candidates, got {len(result['candidates'])}")
+        # src/pipeline/candidate_generator.py's confirm-loop stops as soon
+        # as an attempt deterministically confirms, so a non-rejected
+        # result now has anywhere from 1 (confirmed immediately) to
+        # MAX_ATTEMPTS (confirm-loop exhausted its retries) candidates --
+        # not always exactly 3.
+        if not (1 <= len(result["candidates"]) <= MAX_ATTEMPTS):
+            problems.append(
+                f"expected 1-{MAX_ATTEMPTS} candidates, got {len(result['candidates'])}"
+            )
         if not (0 <= result["recommended_index"] < len(result["candidates"])):
             problems.append(f"recommended_index {result['recommended_index']} out of range")
     if not isinstance(result["recommended_score"], (int, float)):
