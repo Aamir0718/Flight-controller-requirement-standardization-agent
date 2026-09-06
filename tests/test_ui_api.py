@@ -478,6 +478,21 @@ class TestDownload:
 # ---------------------------------------------------------------------------
 
 
+def _fake_pairwise_similarities(requirements, similarity: float = 0.1) -> dict:
+    """A canned compute_pairwise_similarities() result (same shape the real
+    ConsistencyAnalyzer.compute_pairwise_similarities() returns) -- for
+    fakes standing in for ConsistencyAnalyzer in the consistency-matrix
+    endpoint tests, which now calls this method too (to show a real
+    number for "independent" cells, not just the flagged ones)."""
+    ids = [r["id"] for r in requirements]
+    pairs = [
+        {"req_id_1": ids[i], "req_id_2": ids[j], "similarity": similarity,
+         "distance": 1.0 - similarity, "angle_degrees": 0.0}
+        for i in range(len(ids)) for j in range(i + 1, len(ids))
+    ]
+    return {"pairs": pairs, "method": "fake", "total_requirements": len(requirements)}
+
+
 class _FakeCleanConsistencyAnalyzer:
     """Always finds 0 relationships, without crashing."""
 
@@ -494,6 +509,9 @@ class _FakeCleanConsistencyAnalyzer:
             summary={"duplicates": 0, "similar": 0, "contradictions": 0, "independent": 0},
             contradiction_check_skipped=False,
         )
+
+    def compute_pairwise_similarities(self, requirements):
+        return _fake_pairwise_similarities(requirements)
 
 
 class _FakeCrashingConsistencyAnalyzer:
@@ -609,6 +627,10 @@ class TestConsistencyMatrix:
         assert data["cells"][0]["relationship_type"] == "independent"
         assert data["cells"][0]["display_id_1"] == 1
         assert data["cells"][0]["display_id_2"] == 2
+        # Independent cells aren't in the relationships table -- the
+        # number still has to come from somewhere (a fresh, cheap,
+        # no-LLM similarity computation), not be left null.
+        assert data["cells"][0]["similarity_score"] == pytest.approx(0.1)
 
     def test_flagged_pair_appears_with_its_real_relationship_type(self, api_env, monkeypatch):
         client, _ = api_env
@@ -638,6 +660,9 @@ class TestConsistencyMatrix:
                     ],
                     summary={"duplicates": 1, "similar": 0, "contradictions": 0, "independent": 0},
                 )
+
+            def compute_pairwise_similarities(self, requirements):
+                return _fake_pairwise_similarities(requirements, similarity=1.0)
 
         monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeDuplicateAnalyzer)
         run_id = _upload(client).json()["run_id"]

@@ -31,6 +31,16 @@ const MATRIX_CELL_STYLE: Record<string, string> = {
   independent: "bg-[#00C853]/40",
 };
 
+// Text color per cell background, for legibility -- amber is bright
+// enough to need dark text; the rest sit on dark-enough backgrounds for
+// white to read clearly.
+const MATRIX_TEXT_STYLE: Record<string, string> = {
+  duplicate: "text-white",
+  contradiction: "text-white",
+  similar: "text-[#1A1400]",
+  independent: "text-white/90",
+};
+
 function pairKey(a: number, b: number): string {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
@@ -363,10 +373,15 @@ export default function ConsistencyPage() {
         className="drdo-card p-6"
       >
         <div className="pb-4 border-b border-[#243244] mb-4 flex items-center justify-between flex-wrap gap-3">
-          <h2 className="text-base font-bold text-[#F5F7FA] flex items-center gap-2">
-            <Grid3x3 className="w-4 h-4 text-[#1EA7FF]" />
-            Consistency Matrix
-          </h2>
+          <div>
+            <h2 className="text-base font-bold text-[#F5F7FA] flex items-center gap-2">
+              <Grid3x3 className="w-4 h-4 text-[#1EA7FF]" />
+              Consistency Matrix
+            </h2>
+            <p className="text-[10px] text-[#8FA3BF] mt-1">
+              Each cell shows the similarity % between that pair of requirements.
+            </p>
+          </div>
           <div className="flex items-center gap-3 text-[10px] text-[#8FA3BF]">
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-sm bg-[#FF4D4F] inline-block" /> Duplicate / Contradiction
@@ -391,12 +406,12 @@ export default function ConsistencyPage() {
             <table className="border-collapse text-[10px]">
               <thead>
                 <tr>
-                  <th className="sticky top-0 left-0 z-20 bg-[#0F172A] border border-[#243244] w-9 h-9" />
+                  <th className="sticky top-0 left-0 z-20 bg-[#0F172A] border border-[#243244] w-11 h-9" />
                   {matrixData.requirements.map((colReq) => (
                     <th
                       key={colReq.id}
                       title={`#${colReq.display_id}: ${colReq.text}`}
-                      className="sticky top-0 z-10 bg-[#0F172A] border border-[#243244] w-9 h-9 font-mono font-bold text-[#8FA3BF] text-center"
+                      className="sticky top-0 z-10 bg-[#0F172A] border border-[#243244] w-11 h-9 font-mono font-bold text-[#8FA3BF] text-center"
                     >
                       {colReq.display_id}
                     </th>
@@ -408,7 +423,7 @@ export default function ConsistencyPage() {
                   <tr key={rowReq.id}>
                     <th
                       title={`#${rowReq.display_id}: ${rowReq.text}`}
-                      className="sticky left-0 z-10 bg-[#0F172A] border border-[#243244] w-9 h-9 font-mono font-bold text-[#8FA3BF] text-center"
+                      className="sticky left-0 z-10 bg-[#0F172A] border border-[#243244] w-11 h-9 font-mono font-bold text-[#8FA3BF] text-center"
                     >
                       {rowReq.display_id}
                     </th>
@@ -418,23 +433,26 @@ export default function ConsistencyPage() {
                           <td
                             key={colReq.id}
                             title={`#${rowReq.display_id}: ${rowReq.text}`}
-                            className="border border-[#243244] w-9 h-9 bg-[#243244]"
+                            className="border border-[#243244] w-11 h-9 bg-[#243244]"
                           />
                         );
                       }
                       const cell = cellByPair.get(pairKey(rowReq.display_id, colReq.display_id));
                       const type = cell?.relationship_type || "independent";
+                      const pct = cell?.similarity_score != null ? Math.round(cell.similarity_score * 100) : null;
                       const tooltip = cell
                         ? `#${rowReq.display_id} vs #${colReq.display_id}: ${type}${
-                            cell.similarity_score != null ? ` (${(cell.similarity_score * 100).toFixed(0)}%)` : ""
+                            pct != null ? ` (${pct}%)` : ""
                           }${cell.reason ? ` -- ${cell.reason}` : ""}`
                         : `#${rowReq.display_id} vs #${colReq.display_id}: independent`;
                       return (
                         <td
                           key={colReq.id}
                           title={tooltip}
-                          className={`border border-[#243244] w-9 h-9 ${MATRIX_CELL_STYLE[type]} hover:opacity-70 transition cursor-default`}
-                        />
+                          className={`border border-[#243244] w-11 h-9 font-mono font-semibold text-center ${MATRIX_CELL_STYLE[type]} ${MATRIX_TEXT_STYLE[type]} hover:opacity-70 transition cursor-default`}
+                        >
+                          {pct != null ? pct : ""}
+                        </td>
                       );
                     })}
                   </tr>

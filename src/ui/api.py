@@ -636,9 +636,22 @@ def get_consistency_matrix(run_id: int) -> dict:
     at once instead of reading a row-per-flagged-pair table.
 
     Reuses whatever the last "Re-analyze" (POST .../reanalyze-consistency)
-    already computed and saved -- does NOT recompute or call the LLM
-    itself. Any pair not in the saved relationships table is "independent"
-    (no LLM/embedding call needed to know that -- see the guard below).
+    already computed and saved for the relationship TYPE of each pair --
+    does not call the LLM itself. The similarity NUMBER shown for every
+    cell (including "independent" ones, which the relationships table
+    doesn't store) is a fresh pure-embedding cosine-similarity computation
+    -- same cheap, no-LLM call the Embedding Distance tab already makes,
+    just so the grid can show a real percentage in every square, not only
+    the flagged ones.
+
+    Note on interpretation: a HIGH number can mean duplicate, similar, OR
+    contradiction -- a contradiction is almost always about the same
+    topic as its counterpart (same subject, opposite constraint), so it
+    scores similarity just as high as a genuine duplicate. A LOW number
+    only ever means "unrelated topics" (independent), never
+    "contradictory". That's exactly why relationship_type -- not the raw
+    number -- is what a caller should color/highlight by; the number
+    alone cannot distinguish similar from contradictory.
 
     Returns cells=[] (with consistency_analyzed_at/consistency_last_error
     still populated) when analysis has never run or its last run failed --
@@ -670,18 +683,26 @@ def get_consistency_matrix(run_id: int) -> dict:
             }
             display_by_id = {r["id"]: r["sequence_in_run"] + 1 for r in requirements}
 
+            req_data = [{"id": r["id"], "recommended_text": r["recommended_text"]} for r in requirements]
+            sim_result = ConsistencyAnalyzer().compute_pairwise_similarities(req_data)
+            sim_by_pair = {
+                tuple(sorted((p["req_id_1"], p["req_id_2"]))): p["similarity"]
+                for p in sim_result["pairs"]
+            }
+
             ids = [r["id"] for r in requirements]
             for i in range(len(ids)):
                 for j in range(i + 1, len(ids)):
                     pair_key = tuple(sorted((ids[i], ids[j])))
                     rel = rel_by_pair.get(pair_key)
+                    similarity = rel["similarity_score"] if rel else sim_by_pair.get(pair_key)
                     cells.append({
                         "req_id_1": pair_key[0],
                         "req_id_2": pair_key[1],
                         "display_id_1": display_by_id[pair_key[0]],
                         "display_id_2": display_by_id[pair_key[1]],
                         "relationship_type": rel["relationship_type"] if rel else "independent",
-                        "similarity_score": rel["similarity_score"] if rel else None,
+                        "similarity_score": similarity,
                         "reason": rel["reason"] if rel else None,
                     })
 
