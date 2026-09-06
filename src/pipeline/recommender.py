@@ -1,5 +1,7 @@
-"""Picks the best of 3 candidate rewrites using the deterministic INCOSE
-scorer -- never another LLM call.
+"""Picks the best candidate rewrite (however many src/pipeline/
+candidate_generator.py's confirm-loop actually generated -- usually 1, up
+to MAX_ATTEMPTS) using the deterministic INCOSE scorer -- never another
+LLM call.
 
 recommend() runs each src/pipeline/candidate_generator.Candidate's
 rewritten_text through src/rules/incose_scorer.score_requirement() (pure,
@@ -28,8 +30,8 @@ has_invented_number = True in its ScoredCandidate -- callers (see
 src/pipeline/graph.py's Finalize node) must treat that as a hard trigger
 for needs_human_review, not a score to weigh against the threshold.
 
-The result carries all 3 candidates with their individual scores and
-pass/fail rule breakdowns, plus a single recommended_index.
+The result carries every candidate given to it with their individual
+scores and pass/fail rule breakdowns, plus a single recommended_index.
 """
 
 from __future__ import annotations

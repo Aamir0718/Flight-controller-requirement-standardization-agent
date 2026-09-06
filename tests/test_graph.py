@@ -107,8 +107,19 @@ class TestRunRequirementOutputShape:
         result = run_requirement(_graph(), VAGUE_TEXT)
         assert result["ears_pattern"]["pattern"] == "State-driven"
 
-    def test_exactly_3_candidates_by_default(self):
+    def test_exactly_1_candidate_when_the_first_attempt_already_confirms(self):
+        # VAGUE_TEXT scores 96.4 and is EARS-valid, so it clears the
+        # default 80.0 compliance_threshold on the first attempt -- the
+        # confirm-loop (src/pipeline/candidate_generator.py) stops there
+        # rather than always spending 2 more LLM calls regardless.
         result = run_requirement(_graph(), VAGUE_TEXT)
+        assert len(result["candidates"]) == 1
+        assert [c["index"] for c in result["candidates"]] == [0]
+
+    def test_retries_up_to_max_attempts_when_nothing_confirms(self):
+        # An unreachable compliance_threshold forces every attempt to be
+        # treated as failing, exhausting the confirm-loop's attempt cap.
+        result = run_requirement(_graph(compliance_threshold=101.0), VAGUE_TEXT)
         assert len(result["candidates"]) == 3
         assert [c["index"] for c in result["candidates"]] == [0, 1, 2]
 
@@ -126,7 +137,12 @@ class TestRunRequirementOutputShape:
 
     def test_vague_term_suggestions_come_from_the_recommended_candidate(self):
         client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
-        graph = build_graph(client=client, compliance_threshold=80.0)
+        # A threshold between VAGUE_TEXT's 96.4 and COMPLIANT_REWRITE's
+        # 100.0 forces attempt 0 (VAGUE_TEXT) to fail the confirm-loop's
+        # recheck and retry into attempt 1 (COMPLIANT_REWRITE, the one
+        # patched with vague_terms below), which then confirms and becomes
+        # the (only, and therefore recommended) candidate.
+        graph = build_graph(client=client, compliance_threshold=97.0)
         # patch in vague_terms on what will become the recommended candidate
         real_generate_structured = client.generate_structured
 
@@ -241,8 +257,12 @@ class TestIncoseGate:
         client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
         result = run_requirement(_graph(client), VAGUE_TEXT)
 
-        assert len(result["candidates"]) == 3
-        assert len(client.calls) == 3
+        # The point of this test is that the LLM got called at all (the
+        # gate didn't reject it) -- how many of the 3 canned attempts the
+        # confirm-loop actually needed is incidental (VAGUE_TEXT confirms
+        # on the first, so exactly 1 here).
+        assert len(result["candidates"]) >= 1
+        assert len(client.calls) == len(result["candidates"])
 
     def test_lower_threshold_lets_borderline_text_through(self):
         # Same text, but with the gate threshold dropped low enough that
@@ -252,7 +272,9 @@ class TestIncoseGate:
         result = run_requirement(
             _graph(client, incose_gate_threshold=50.0), self.HEAVILY_DEFECTIVE_TEXT
         )
-        assert len(result["candidates"]) == 3
+        # The point is that the LLM was reached at all -- CLEAN_TEXT scores
+        # 100.0, so the confirm-loop stops after the first attempt.
+        assert len(result["candidates"]) >= 1
 
     def test_incose_rejected_text_never_reaches_ears_check(self):
         # A requirement that is structurally EARS-valid (starts with "The
@@ -335,9 +357,20 @@ class TestGenerateRequirement:
         client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
         result = generate_requirement(analyzed, client)
 
-        assert len(client.calls) == 3
-        assert len(result["candidates"]) == 3
+        # VAGUE_TEXT confirms on the first attempt (score 96.4 >= the
+        # default 80.0 threshold), so the confirm-loop makes just 1 call.
+        assert len(client.calls) == 1
+        assert len(result["candidates"]) == 1
         assert result["status"] == "generated"
+
+    def test_retries_when_the_first_attempt_does_not_confirm(self):
+        analyzed = analyze_requirement(VAGUE_TEXT)
+        client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
+        result = generate_requirement(analyzed, client, compliance_threshold=97.0)
+
+        assert len(client.calls) == 2
+        assert len(result["candidates"]) == 2
+        assert result["recommended_text"] == COMPLIANT_REWRITE
 
     def test_runs_even_when_analysis_gate_failed_since_a_human_asked_for_it(self):
         # No hard block: the deterministic gates decide whether the LLM
@@ -349,7 +382,7 @@ class TestGenerateRequirement:
         assert analyzed["gate_passed"] is False
         client = FakeLLMClient([VAGUE_TEXT, COMPLIANT_REWRITE, VAGUE_TEXT])
         result = generate_requirement(analyzed, client)
-        assert len(result["candidates"]) == 3
+        assert len(result["candidates"]) >= 1
 
     def test_compliant_llm_output_is_not_flagged(self):
         analyzed = analyze_requirement(VAGUE_TEXT)

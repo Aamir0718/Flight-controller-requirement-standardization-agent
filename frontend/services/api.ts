@@ -122,6 +122,7 @@ export const apiService = {
   },
 
   async reanalyzeConsistency(runId: number): Promise<{
+    status: "completed" | "failed" | "too_few_requirements";
     message: string;
     contradiction_check_skipped: boolean;
     summary: Record<string, number>;

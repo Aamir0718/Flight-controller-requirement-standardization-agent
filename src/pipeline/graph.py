@@ -30,8 +30,8 @@ the measured evidence.
 - AbbreviationCheck: deterministic, no LLM. Runs INCOSE R37 (Acronyms) and
   R38 (Abbreviations) -- via src/rules/incose_scorer.py's
   check_abbreviations() -- against the original text. Acronyms in
-  data/rules/known_abbreviations.json (GPS, INS, IMU, ...) are treated as
-  already defined by domain convention. Deliberately ADVISORY, not a
+  data/rules/word_lists.xlsx's "acronyms" sheet (GPS, INS, IMU, ...) are
+  treated as already defined by domain convention. Deliberately ADVISORY, not a
   pre-LLM gate: findings are folded into rule_flags as quality flags a
   human reviewer sees (same as RuleFlag's), not a rejection -- a fixed
   allowlist can never keep up with a real, large requirement corpus, and
@@ -86,19 +86,24 @@ the measured evidence.
   (state["llm_elapsed_ms"]) so the console can show that contrast
   explicitly rather than leaving it to be inferred from timestamps. The
   RuleFlag flags and ClassifyPattern's guess both feed into the prompt
-  (src/llm/prompts.py, via candidate_generator -> build_prompt). Generates
-  all 3 candidates concurrently (threads) rather than one call at a time --
-  each is an independent, blocking HTTP call to the LLM endpoint, so this is a real
-  speedup whenever the LLM endpoint can service more than one request at a time.
+  (src/llm/prompts.py, via candidate_generator -> build_prompt). Makes ONE
+  LLM call, deterministically rechecks it (EARS + INCOSE score, no LLM),
+  and stops there if it already confirms -- only retries (with a much
+  smaller correction prompt, up to candidate_generator.MAX_ATTEMPTS total)
+  when it doesn't. Attempts are sequential, not concurrent -- each retry
+  needs the previous attempt's text/failures -- so the common case is 1
+  call per requirement instead of the fixed 3 this used to always make.
 - ScoreAndRecommend: src/pipeline/recommender.py -- deterministic INCOSE
-  scoring of all 3 candidates (the full rulebook, R1/R37/R38 included --
-  this is judging the LLM's rewrite quality, not re-running IncoseCheck's
-  gate), no LLM.
+  scoring of every attempt GenerateCandidates made (the full rulebook,
+  R1/R37/R38 included -- this is judging the LLM's rewrite quality, not
+  re-running IncoseCheck's gate), no LLM. Usually just 1 attempt to rank
+  now; still handles more (up to MAX_ATTEMPTS) exactly as before when the
+  confirm-loop needed retries.
 - Finalize: assembles the public result and decides needs_human_review by
   comparing the recommended candidate's score against a configurable
   compliance_threshold (config/settings.yaml's pipeline.compliance_threshold)
-  -- a low-scoring "best of 3" is not presented as a confident
-  recommendation.
+  -- a low-scoring result is not presented as a confident recommendation
+  even after the confirm-loop's retries were exhausted.
 - RejectNonEars: ComplianceCheck's or IncoseCheck's rejection branch
   (whichever gate actually rejected -- state["rejected_by"] says which).
   Assembles the same public result shape as Finalize (so every
@@ -460,11 +465,15 @@ def _make_reject_node(compliance_threshold: float):
 # ---------------------------------------------------------------------------
 
 
-def _make_generate_candidates_node(client: LocalLLMClient):
+def _make_generate_candidates_node(client: LocalLLMClient, compliance_threshold: float):
     def generate_candidates_node(state: PipelineState) -> dict:
         flags = [f["violation_type"] for f in state["rule_flags"]]
         ears_pattern = state["ears_classification"]["pattern"]
         llm_start = time.perf_counter()
+        # generate_candidates() itself stops after 1 LLM call whenever that
+        # attempt already confirms against compliance_threshold (see its
+        # own docstring) -- only retries (up to its own attempt cap) when
+        # it doesn't, so this is no longer always 3 calls.
         candidates = generate_candidates(
             client,
             state["original_text"],
@@ -472,6 +481,7 @@ def _make_generate_candidates_node(client: LocalLLMClient):
             ears_pattern=ears_pattern,
             incose_score=state.get("incose_score"),
             incose_violations=state.get("incose_violations"),
+            compliance_threshold=compliance_threshold,
         )
         llm_elapsed_ms = (time.perf_counter() - llm_start) * 1000
         return {"candidates_raw": candidates, "llm_elapsed_ms": llm_elapsed_ms}
@@ -502,8 +512,8 @@ def _make_finalize_node(compliance_threshold: float):
         # INCOSE checks (a fake "within 200 ms" satisfies R6/R33/R34 just
         # as well as a real one), so score alone can't be trusted here.
         # recommender.py already ranks non-inventing candidates first;
-        # this only fires when every one of the 3 candidates invented a
-        # number and there was no clean candidate to prefer instead.
+        # this only fires when every attempt the confirm-loop made invented
+        # a number and there was no clean candidate to prefer instead.
         needs_human_review = (
             recommended.score < compliance_threshold or recommended.has_invented_number
         )
@@ -670,7 +680,7 @@ def generate_requirement(
         "incose_score": original_score.score,
         "incose_violations": [asdict(f) for f in original_score.failed],
     }
-    state.update(_make_generate_candidates_node(client)(state))
+    state.update(_make_generate_candidates_node(client, compliance_threshold)(state))
     state.update(score_and_recommend_node(state))
     finalize_output = _make_finalize_node(compliance_threshold)(state)
     result = dict(finalize_output["result"])
@@ -742,7 +752,7 @@ def build_graph(
     graph.add_node("ComplianceCheck", compliance_check_node)
     graph.add_node("IncoseCheck", _make_incose_check_node(incose_gate_threshold))
     graph.add_node("RejectNonEars", _make_reject_node(compliance_threshold))
-    graph.add_node("GenerateCandidates", _make_generate_candidates_node(client))
+    graph.add_node("GenerateCandidates", _make_generate_candidates_node(client, compliance_threshold))
     graph.add_node("ScoreAndRecommend", score_and_recommend_node)
     graph.add_node("Finalize", _make_finalize_node(compliance_threshold))
 

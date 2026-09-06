@@ -148,10 +148,18 @@ class TestIsWellFormed:
         problems = rc._is_well_formed(result)
         assert any("missing keys" in p for p in problems)
 
-    def test_flags_wrong_candidate_count(self):
+    def test_does_not_flag_fewer_than_3_candidates(self):
+        # src/pipeline/candidate_generator.py's confirm-loop stops as soon
+        # as an attempt confirms -- 1 or 2 candidates is a normal,
+        # well-formed result now, not a structural problem.
         result = _well_formed_result(candidates=_well_formed_result()["candidates"][:2])
+        assert rc._is_well_formed(result) == []
+
+    def test_flags_more_than_max_attempts_candidates(self):
+        extra = _well_formed_result()["candidates"] + [{"index": 3, "rewritten_text": "D", "score": 60.0}]
+        result = _well_formed_result(candidates=extra)
         problems = rc._is_well_formed(result)
-        assert any("3 candidates" in p for p in problems)
+        assert any("candidates" in p for p in problems)
 
     def test_flags_out_of_range_recommended_index(self):
         result = _well_formed_result(recommended_index=5)

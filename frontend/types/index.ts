@@ -133,6 +133,13 @@ export interface ConsistencyResponse {
   total_requirements: number;
   summary: ConsistencySummary;
   relationships: RequirementRelationship[];
+  // Both null => consistency analysis has never run for this run (an
+  // empty relationships list alone can't tell that apart from "ran and
+  // found nothing"). consistency_analyzed_at set + consistency_last_error
+  // set => the last analysis attempt crashed; do not read the summary
+  // above as a real 100%-consistent result in that case.
+  consistency_analyzed_at: string | null;
+  consistency_last_error: string | null;
 }
 
 export interface StageEvent {

@@ -88,7 +88,16 @@ class TestScorerPicksObjectivelyBestCandidate:
                 return _result(text)
 
         client = FakeLLMClient()
-        candidates = generate_candidates(client, "irrelevant for this test", flags=[])
+        # An unreachable compliance_threshold forces generate_candidates()'s
+        # confirm-loop to exhaust every attempt (see src/pipeline/
+        # candidate_generator.py) instead of stopping as soon as one
+        # attempt already clears a normal threshold -- this test's whole
+        # point is exercising recommend()'s ranking over a full scrambled
+        # set of 3, not the confirm-loop's early-stop behavior (that has
+        # its own tests in tests/test_candidate_generator.py).
+        candidates = generate_candidates(
+            client, "irrelevant for this test", flags=[], compliance_threshold=101.0
+        )
         assert client.calls == 3
 
         recommendation = recommend(candidates, ORIGINAL_TEXT)

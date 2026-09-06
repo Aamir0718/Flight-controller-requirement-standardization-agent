@@ -115,7 +115,12 @@ class TestEvaluateExample:
 
         assert "pipeline_error" not in record
         assert isinstance(record["recommended_score"], float)
-        assert len(record["alternate_scores"]) == 2
+        # _FakeIdealClient returns the golden compliant_version, which
+        # confirms on the very first attempt (src/pipeline/
+        # candidate_generator.py's confirm-loop stops there) -- 0
+        # alternates, not always 2, now that generation doesn't always
+        # make 3 calls regardless of whether the first was already good.
+        assert record["alternate_scores"] == []
         assert isinstance(record["recommended_has_highest_score"], bool)
         assert isinstance(record["needs_human_review"], bool)
         assert isinstance(record["has_invented_number"], bool)

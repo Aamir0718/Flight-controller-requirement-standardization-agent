@@ -22,6 +22,13 @@ single requirement's text (they compare across a whole requirement set, or
 need an external glossary/style guide) -- those are marked
 "automatable": false in the rulebook and are skipped here. See each rule's
 "rationale_not_automatable" in incose_rulebook.json.
+
+Every plain word/phrase list a check below needs (vague terms, escape
+clauses, banned abbreviations, known acronyms, ...) lives in
+data/rules/word_lists.xlsx, not hardcoded here -- see
+src/rules/word_lists.py's module docstring for why (short version: a
+domain reviewer can edit a spreadsheet; these checks are just word
+matches, nothing about them needs a code change to update).
 """
 
 from __future__ import annotations
@@ -33,11 +40,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from rules.word_lists import load_word_list
+
 _RULEBOOK_PATH = (
     Path(__file__).resolve().parent.parent.parent / "data" / "rules" / "incose_rulebook.json"
-)
-_KNOWN_ABBREVIATIONS_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "rules" / "known_abbreviations.json"
 )
 
 
@@ -67,13 +73,13 @@ def load_rulebook(path: Path | None = None) -> list[dict]:
 
 @functools.lru_cache(maxsize=4)
 def load_known_abbreviations(path: Path | None = None) -> frozenset[str]:
-    """Loads data/rules/known_abbreviations.json's allowlist, uppercased,
-    for R37 (Acronyms) to treat as already-defined by domain convention --
+    """Loads data/rules/word_lists.xlsx's "acronyms" sheet, uppercased, for
+    R37 (Acronyms) to treat as already-defined by domain convention --
     GPS/INS/IMU/etc. in a flight-controller requirement shouldn't be
-    flagged just for not spelling the acronym out inline every time."""
-    abbrev_path = path or _KNOWN_ABBREVIATIONS_PATH
-    data = json.loads(abbrev_path.read_text(encoding="utf-8"))
-    return frozenset(a.upper() for a in data["abbreviations"])
+    flagged just for not spelling the acronym out inline every time.
+    ``path`` here means the word_lists.xlsx path (passed through to
+    load_word_list), not a JSON file."""
+    return frozenset(a.upper() for a in load_word_list("acronyms", path))
 
 
 def _automatable_rules(path: Path | None = None) -> list[dict]:
@@ -146,23 +152,7 @@ def _bare_numbers(text: str) -> list[str]:
     return bare
 
 
-_ACTION_VERBS = {
-    "activate", "adjust", "aggregate", "alert", "allow", "apply", "arm",
-    "assert", "attenuate", "authenticate", "block", "calculate", "capture",
-    "clear", "close", "command", "compute", "configure", "correct",
-    "deactivate", "decrypt", "deploy", "detect", "disable", "discard",
-    "disengage", "display", "double", "drive", "enable", "encrypt",
-    "engage", "enter", "execute", "extend", "filter", "flag", "flash",
-    "generate", "halt", "highlight", "hold", "identify", "illuminate",
-    "indicate", "initialize", "initiate", "isolate", "issue", "limit",
-    "log", "maintain", "modulate", "monitor", "notify", "open", "output",
-    "overwrite", "parse", "poll", "process", "project", "provide", "pump",
-    "read", "record", "reduce", "reject", "release", "render", "report",
-    "reset", "resume", "retry", "sample", "save", "scale", "scan", "send",
-    "set", "shunt", "shutdown", "sound", "store", "switch", "target",
-    "terminate", "track", "transition", "transmit", "trigger", "update",
-    "upload", "verify", "write",
-}
+_ACTION_VERBS = set(load_word_list("action_verbs"))
 
 
 # ---------------------------------------------------------------------------
@@ -234,31 +224,7 @@ def _check_r6(text: str) -> list[str]:
     return [f"Numeric value '{n}' has no unit of measure stated." for n in _bare_numbers(text)]
 
 
-_R7_TERMS = [
-    # Literal INCOSE R7 examples.
-    "some", "any", "allowable", "several", "many", "a lot of", "a few",
-    "almost always", "very nearly", "nearly", "about", "close to", "almost",
-    "approximate", "ancillary", "relevant", "routine", "common", "generic",
-    "significant", "flexible", "expandable", "typical", "sufficient",
-    "adequate", "appropriate", "efficient", "effective", "proficient",
-    "reasonable", "customary",
-    # INCOSE frames both lists with "such as" (non-exhaustive); these are
-    # additional words that provide the same kind of vague, unquantifiable
-    # qualification R7 targets -- speed/manner/quality adjectives with no
-    # measurable criterion attached.
-    "fast", "rapid", "rapidly", "quickly", "swiftly", "promptly",
-    "immediately", "instantly", "continuously", "continually",
-    "permanently", "negligible", "trivial", "minor", "excessive",
-    "extreme", "substantial", "considerable", "normal", "nominal",
-    "standard", "comprehensive", "thorough", "detailed", "clear", "crisp",
-    "neat", "nicely", "cool", "stuff", "stable", "robust", "accurate",
-    "accurately", "precise", "precisely", "safely", "securely", "smoothly",
-    "successfully", "properly", "suitably", "correctly", "satisfactorily",
-    "user-friendly", "intuitive", "ergonomic", "high accuracy",
-    "high precision", "low error", "low latency", "high speed",
-    "efficiently", "effectively", "appropriately", "adequately",
-    "sufficiently", "reasonably", "significantly", "fully", "completely",
-]
+_R7_TERMS = load_word_list("vague_terms")
 _R7_PATTERN = _phrase_pattern(_R7_TERMS)
 
 
@@ -269,16 +235,7 @@ def _check_r7(text: str) -> list[str]:
     return []
 
 
-_R8_PHRASES = [
-    # Literal INCOSE R8 examples.
-    "so far as is possible", "as little as possible", "where possible",
-    "as much as possible", "if it should prove necessary", "if necessary",
-    "to the extent necessary", "as appropriate", "as required",
-    "to the extent practical", "if practicable",
-    # Same escape-clause spirit (per R8's own "such as" framing).
-    "if practical", "if safe", "when safe to do so", "where applicable",
-    "when appropriate", "to the extent possible",
-]
+_R8_PHRASES = load_word_list("escape_clauses")
 _R8_PATTERN = _phrase_pattern(_R8_PHRASES)
 
 
@@ -302,15 +259,7 @@ def _check_r9(text: str) -> list[str]:
     return []
 
 
-_R10_PHRASES = [
-    # Literal INCOSE R10 examples.
-    "to be designed to", "to be able to", "to be capable of", "to enable",
-    "to allow",
-    # Same superfluous-infinitive spirit as it actually shows up after
-    # "shall" in practice ("the system shall be able to X"), not just in
-    # the "to be able to" infinitive form INCOSE's example is written in.
-    "be able to", "be capable of",
-]
+_R10_PHRASES = load_word_list("superfluous_infinitives")
 _R10_PATTERN = _phrase_pattern(_R10_PHRASES)
 
 
@@ -392,11 +341,7 @@ def _check_r18(text: str) -> list[str]:
     return reasons
 
 
-_R19_TERMS = [
-    "and", "or", "then", "unless", "but", "as well as", "but also",
-    "however", "whether", "meanwhile", "whereas", "on the other hand",
-    "otherwise",
-]
+_R19_TERMS = load_word_list("combinator_words")
 _R19_PATTERN = _phrase_pattern(_R19_TERMS)
 
 
@@ -407,10 +352,7 @@ def _check_r19(text: str) -> list[str]:
     return []
 
 
-_R20_PHRASES = [
-    "in order to", "so that", "for the purpose of", "the intent of",
-    "the reason for",
-]
+_R20_PHRASES = load_word_list("purpose_phrases")
 _R20_PATTERN = _phrase_pattern(_R20_PHRASES)
 
 
@@ -433,10 +375,7 @@ def _check_r21(text: str) -> list[str]:
     return reasons
 
 
-_R22_PHRASES = [
-    "the following", "such as", "various", "a variety of", "these parameters",
-    "these items", "several types of",
-]
+_R22_PHRASES = load_word_list("group_noun_references")
 _R22_PATTERN = _phrase_pattern(_R22_PHRASES)
 
 
@@ -450,11 +389,7 @@ def _check_r22(text: str) -> list[str]:
     return []
 
 
-_R24_TERMS = [
-    "it", "its", "this", "that", "these", "those", "they", "them", "their",
-    "one", "anyone", "someone", "anything", "something", "he", "she", "him",
-    "her",
-]
+_R24_TERMS = load_word_list("personal_pronouns")
 _R24_PATTERN = _phrase_pattern(_R24_TERMS)
 
 
@@ -465,7 +400,7 @@ def _check_r24(text: str) -> list[str]:
     return []
 
 
-_R26_TERMS = ["100%", "all", "every", "always", "never", "none", "zero defects"]
+_R26_TERMS = load_word_list("unachievable_absolutes")
 _R26_PATTERN = _phrase_pattern(_R26_TERMS)
 
 
@@ -476,10 +411,7 @@ def _check_r26(text: str) -> list[str]:
     return []
 
 
-_R27_PHRASES = [
-    "typically", "usually", "generally", "normally", "in most cases",
-    "under normal circumstances",
-]
+_R27_PHRASES = load_word_list("implied_applicability")
 _R27_PATTERN = _phrase_pattern(_R27_PHRASES)
 
 
@@ -509,7 +441,7 @@ def _check_r28(text: str) -> list[str]:
     return []
 
 
-_R32_PATTERN = _phrase_pattern(["all", "any", "both"])
+_R32_PATTERN = _phrase_pattern(load_word_list("universal_quantifiers"))
 
 
 def _check_r32(text: str) -> list[str]:
@@ -551,12 +483,7 @@ def _check_r33(text: str) -> list[str]:
     return []
 
 
-_R34_TERMS = [
-    "optimize", "optimide", "optimizes", "optimized", "optimization",
-    "maximize", "maximizes", "maximized", "minimize", "minimizes",
-    "minimized", "optimal", "optimum", "improve", "improves", "improved",
-    "enhance", "enhances", "enhanced",
-]
+_R34_TERMS = load_word_list("optimization_language")
 _R34_PATTERN = _phrase_pattern(_R34_TERMS)
 
 
@@ -570,14 +497,7 @@ def _check_r34(text: str) -> list[str]:
     return []
 
 
-_R35_TERMS = [
-    # Literal INCOSE R35 examples.
-    "eventually", "until", "before", "after", "as", "once", "earliest",
-    "latest", "instantaneous", "simultaneous", "at last",
-    # Same indefinite-temporal-keyword spirit (per R35's own "such as" framing).
-    "daily", "weekly", "monthly", "periodically", "regularly", "frequently",
-    "occasionally", "intermittently", "as soon as possible", "without delay",
-]
+_R35_TERMS = load_word_list("indefinite_temporal_keywords")
 _R35_PATTERN = _phrase_pattern(_R35_TERMS)
 
 
@@ -597,7 +517,7 @@ def _check_r37(text: str) -> list[str]:
     for m in _ACRONYM.finditer(text):
         acronym = m.group(0)
         if acronym.upper() in known:
-            continue  # defined by domain convention -- see known_abbreviations.json
+            continue  # defined by domain convention -- see data/rules/word_lists.xlsx's "acronyms" sheet
         tail = text[m.end():m.end() + 2]
         if tail.startswith(" ("):
             continue  # assume an inline expansion follows
@@ -608,10 +528,7 @@ def _check_r37(text: str) -> list[str]:
     return reasons
 
 
-_R38_TERMS = [
-    "approx.", "min.", "max.", "temp.", "qty.", "spec.", "req.", "e.g.",
-    "i.e.", "vs.", "w/o", "w/",
-]
+_R38_TERMS = load_word_list("banned_abbreviations")
 _R38_PATTERN = _phrase_pattern(_R38_TERMS)
 
 

@@ -1,28 +1,32 @@
 """Tests for src/pipeline/candidate_generator.py, using a fake LLM client
-(no network, no real Ollama) so generation mechanics -- call count,
-temperature/seed variation, prompt reuse -- can be checked deterministically.
+(no network, no real LLM) so the confirm-loop's mechanics -- call count,
+when it stops early, when/how it retries, temperature/seed variation --
+can be checked deterministically.
 """
 
 from __future__ import annotations
 
 from llm.local_llm_client import LLMResult
 from pipeline.candidate_generator import (
+    MAX_ATTEMPTS,
     MAX_TEMPERATURE,
-    NUM_CANDIDATES,
     SEEDS,
-    TEMPERATURE_OFFSETS,
     generate_candidates,
 )
+
+# Confirms on the very first attempt: real "shall" statement, EARS-matched
+# (Ubiquitous), scores 100/100 on the deterministic INCOSE checker.
+GOOD_TEXT = "The system shall respond to the operator within 200 milliseconds."
+# Never confirms: no "shall" at all, so classify_ears_pattern() always
+# returns UNCLEAR_LABEL regardless of INCOSE score.
+BAD_TEXT = "this is not a real requirement at all"
+
+REQUIREMENT = "While in orbit, the star tracker shall track reference stars continuously."
 
 
 def _result(text: str) -> LLMResult:
     return LLMResult(
-        pattern="State-driven",
-        rewritten_text=text,
-        vague_terms=[],
-        confidence=0.8,
-        notes="",
-        raw={},
+        pattern="State-driven", rewritten_text=text, vague_terms=[], confidence=0.8, notes="", raw={},
     )
 
 
@@ -37,98 +41,111 @@ class FakeLLMClient:
 
     def generate_structured(self, system_prompt, user_prompt, *, temperature=None, seed=None):
         self.calls.append(
-            {
-                "system_prompt": system_prompt,
-                "user_prompt": user_prompt,
-                "temperature": temperature,
-                "seed": seed,
-            }
+            {"system_prompt": system_prompt, "user_prompt": user_prompt, "temperature": temperature, "seed": seed}
         )
         return self._results[len(self.calls) - 1]
 
 
-REQUIREMENT = "While in orbit, the star tracker shall track reference stars continuously."
-
-
-def test_generates_num_candidates_calls():
-    client = FakeLLMClient([_result(f"variant {i}") for i in range(NUM_CANDIDATES)])
+def test_stops_after_one_call_when_the_first_attempt_already_confirms():
+    client = FakeLLMClient([_result(GOOD_TEXT)])
     candidates = generate_candidates(client, REQUIREMENT, flags=[])
-    assert len(candidates) == NUM_CANDIDATES
-    assert len(client.calls) == NUM_CANDIDATES
+    assert len(candidates) == 1
+    assert len(client.calls) == 1
+    assert candidates[0].result.rewritten_text == GOOD_TEXT
 
 
-def test_candidates_carry_the_matching_llm_result_in_call_order():
-    results = [_result("first"), _result("second"), _result("third")]
-    client = FakeLLMClient(results)
+def test_retries_when_the_first_attempt_does_not_confirm():
+    client = FakeLLMClient([_result(BAD_TEXT), _result(GOOD_TEXT)])
     candidates = generate_candidates(client, REQUIREMENT, flags=[])
-    assert [c.result.rewritten_text for c in candidates] == ["first", "second", "third"]
-    assert [c.index for c in candidates] == [0, 1, 2]
+    assert len(candidates) == 2
+    assert len(client.calls) == 2
+    assert [c.result.rewritten_text for c in candidates] == [BAD_TEXT, GOOD_TEXT]
+    assert [c.index for c in candidates] == [0, 1]
 
 
-def test_temperature_and_seed_vary_across_calls_not_identical():
-    client = FakeLLMClient([_result(f"v{i}") for i in range(3)], temperature=0.2)
+def test_stops_at_max_attempts_when_nothing_ever_confirms():
+    client = FakeLLMClient([_result(BAD_TEXT) for _ in range(MAX_ATTEMPTS)])
+    candidates = generate_candidates(client, REQUIREMENT, flags=[])
+    assert len(candidates) == MAX_ATTEMPTS
+    assert len(client.calls) == MAX_ATTEMPTS
+
+
+def test_max_attempts_override():
+    client = FakeLLMClient([_result(BAD_TEXT) for _ in range(5)])
+    candidates = generate_candidates(client, REQUIREMENT, flags=[], max_attempts=5)
+    assert len(candidates) == 5
+
+
+def test_first_attempt_uses_the_full_build_prompt_context():
+    client = FakeLLMClient([_result(GOOD_TEXT)])
+    generate_candidates(client, REQUIREMENT, flags=[], ears_pattern="Event-driven")
+    system_prompt = client.calls[0]["system_prompt"]
+    # build_prompt()'s system header + EARS-pattern block land here; the
+    # only-relevant-pattern trim means the other 5 templates are absent.
+    assert "Event-driven" in system_prompt
+    assert "State-driven" not in system_prompt
+
+
+def test_retry_uses_the_lean_correction_prompt_not_build_prompt_again():
+    client = FakeLLMClient([_result(BAD_TEXT), _result(GOOD_TEXT)])
+    generate_candidates(client, REQUIREMENT, flags=[], ears_pattern="Event-driven")
+
+    retry_user_prompt = client.calls[1]["user_prompt"]
+    assert BAD_TEXT in retry_user_prompt  # cites the previous attempt
+    assert "EARS structure" in retry_user_prompt or "still fails" in retry_user_prompt
+    # The correction call's TOTAL prompt (system + user) must be smaller
+    # than the first call's -- the correction system prompt drops the full
+    # EARS pattern set / rule citations build_prompt() sends, even though
+    # its user prompt is a bit larger (it has to quote the previous
+    # attempt and its specific failures).
+    first_call_total = len(client.calls[0]["system_prompt"]) + len(client.calls[0]["user_prompt"])
+    retry_total = len(client.calls[1]["system_prompt"]) + len(retry_user_prompt)
+    assert retry_total < first_call_total
+
+
+def test_correction_prompt_cites_the_specific_recheck_failure():
+    client = FakeLLMClient([_result(BAD_TEXT), _result(GOOD_TEXT)])
+    generate_candidates(client, REQUIREMENT, flags=[])
+    retry_user_prompt = client.calls[1]["user_prompt"]
+    assert "EARS structure" in retry_user_prompt
+
+
+def test_temperature_and_seed_vary_across_retry_attempts():
+    client = FakeLLMClient([_result(BAD_TEXT), _result(BAD_TEXT), _result(GOOD_TEXT)], temperature=0.2)
     generate_candidates(client, REQUIREMENT, flags=[])
 
     temperatures = [call["temperature"] for call in client.calls]
     seeds = [call["seed"] for call in client.calls]
-
-    # The whole point of varying these is that the 3 calls are NOT identical.
-    assert len(set(temperatures)) > 1
+    assert len(set(temperatures)) > 1  # not identical across attempts
     assert len(set(seeds)) > 1
-    # Check that temperatures match the expected offsets
-    expected_temps = [min(0.2 + offset, MAX_TEMPERATURE) for offset in TEMPERATURE_OFFSETS]
-    assert temperatures == expected_temps
-    # Check that seeds match the expected values
-    assert seeds == list(SEEDS)
+    assert seeds == list(SEEDS[:3])
+    assert all(t <= MAX_TEMPERATURE for t in temperatures)
+    assert temperatures == sorted(temperatures)  # strictly non-decreasing across retries
 
 
-def test_temperature_offsets_are_clamped_to_max_temperature():
-    client = FakeLLMClient([_result(f"v{i}") for i in range(3)], temperature=0.95)
+def test_high_base_temperature_is_clamped_to_max_temperature():
+    client = FakeLLMClient([_result(BAD_TEXT) for _ in range(MAX_ATTEMPTS)], temperature=0.95)
     generate_candidates(client, REQUIREMENT, flags=[])
     temperatures = [call["temperature"] for call in client.calls]
     assert all(t <= MAX_TEMPERATURE for t in temperatures)
-    assert max(temperatures) == MAX_TEMPERATURE
 
 
-def test_all_calls_reuse_the_same_prompt():
-    client = FakeLLMClient([_result(f"v{i}") for i in range(3)])
-    generate_candidates(client, REQUIREMENT, flags=[])
-    system_prompts = {call["system_prompt"] for call in client.calls}
-    # System prompts should be the same (they all have the same structural guidance)
-    assert len(system_prompts) == 1
-    # User prompts should differ (they have call-specific structural instructions)
-    user_prompts = [call["user_prompt"] for call in client.calls]
-    assert len(user_prompts) == 3
-    # Each user prompt should have call-specific guidance
-    assert any("Candidate 1" in p for p in user_prompts)
-    assert any("Candidate 2" in p for p in user_prompts)
-    assert any("Candidate 3" in p for p in user_prompts)
+def test_candidates_preserve_call_order_and_index():
+    client = FakeLLMClient([_result(BAD_TEXT), _result(BAD_TEXT), _result(GOOD_TEXT)])
+    candidates = generate_candidates(client, REQUIREMENT, flags=[])
+    assert [c.index for c in candidates] == [0, 1, 2]
 
 
-def test_num_candidates_override():
-    client = FakeLLMClient([_result(f"v{i}") for i in range(5)])
+def test_compliance_threshold_is_respected_by_the_confirm_loop():
+    # GOOD_TEXT scores 100 -- passes even an unusually strict threshold --
+    # but an unreachable threshold (101) must force every attempt to be
+    # treated as failing, exhausting all attempts.
+    client = FakeLLMClient([_result(GOOD_TEXT) for _ in range(MAX_ATTEMPTS)])
+    candidates = generate_candidates(client, REQUIREMENT, flags=[], compliance_threshold=101.0)
+    assert len(candidates) == MAX_ATTEMPTS
+
+
+def test_num_candidates_is_a_deprecated_alias_for_max_attempts():
+    client = FakeLLMClient([_result(BAD_TEXT) for _ in range(5)])
     candidates = generate_candidates(client, REQUIREMENT, flags=[], num_candidates=5)
     assert len(candidates) == 5
-
-
-def test_candidates_are_not_identical():
-    """Test that candidates are structurally different, not identical copies."""
-    # Simulate a scenario where the fake client returns slightly different texts
-    # to verify the system can handle diverse candidates
-    results = [
-        _result("When the primary sensor is invalid, the system shall activate the backup sensor."),
-        _result("The system shall activate the backup sensor upon detection of primary sensor invalidity."),
-        _result("Upon detection that the primary sensor is invalid, the system shall transition to the backup sensor."),
-    ]
-    client = FakeLLMClient(results)
-    candidates = generate_candidates(client, REQUIREMENT, flags=[])
-    
-    # Verify we get 3 candidates
-    assert len(candidates) == 3
-    
-    # Verify they are not identical
-    candidate_texts = [c.result.rewritten_text for c in candidates]
-    assert len(set(candidate_texts)) == 3, "All candidates should be different"
-    
-    # Verify indices are preserved
-    assert [c.index for c in candidates] == [0, 1, 2]

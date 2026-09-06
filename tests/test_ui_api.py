@@ -201,7 +201,10 @@ class TestGenerateRequirements:
 
         updated = {r["id"]: r for r in client.get(f"/runs/{run_id}/requirements").json()}
         assert updated[target_id]["status"] == "generated"
-        assert len(updated[target_id]["candidates"]) == 3
+        # _FakeWorkingClient's canned rewrite confirms on the first attempt
+        # (see src/pipeline/candidate_generator.py's confirm-loop), so 1
+        # candidate, not always 3.
+        assert len(updated[target_id]["candidates"]) == 1
         # the other requirement was never touched
         assert updated[other_id]["status"] == "analyzed"
         assert updated[other_id]["candidates"] == []
@@ -216,7 +219,7 @@ class TestGenerateRequirements:
 
         for req in client.get(f"/runs/{run_id}/requirements").json():
             assert req["status"] == "generated"
-            assert len(req["candidates"]) == 3
+            assert len(req["candidates"]) == 1
 
     def test_llm_unreachable_marks_selected_requirements_failed(self, api_env, monkeypatch):
         client, _ = api_env
@@ -462,3 +465,104 @@ class TestDownload:
         sheet = workbook.active
         assert sheet.max_row == 3  # header + 2 requirements
         assert sheet.cell(row=1, column=1).value == "#"
+
+
+# ---------------------------------------------------------------------------
+# GET /runs/{run_id}/consistency, POST /runs/{run_id}/reanalyze-consistency
+#
+# The key thing these guard: an empty relationships table means three very
+# different things -- "never analyzed", "analyzed, genuinely found
+# nothing", "analyzed, crashed" -- and only consistency_analyzed_at /
+# consistency_last_error (src/storage/db.py) tell them apart. A crash must
+# never be reported the same way as a clean zero-relationships result.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCleanConsistencyAnalyzer:
+    """Always finds 0 relationships, without crashing."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def analyze_requirements(self, run_id, requirements):
+        from consistency.analyzer import ConsistencyResult
+
+        return ConsistencyResult(
+            run_id=run_id,
+            total_requirements=len(requirements),
+            relationships=[],
+            summary={"duplicates": 0, "similar": 0, "contradictions": 0, "independent": 0},
+            contradiction_check_skipped=False,
+        )
+
+
+class _FakeCrashingConsistencyAnalyzer:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def analyze_requirements(self, run_id, requirements):
+        raise RuntimeError("simulated consistency analyzer crash")
+
+
+class TestConsistencyAnalysisState:
+    def test_never_analyzed_reports_null_timestamps(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+
+        data = client.get(f"/runs/{run_id}/consistency").json()
+
+        assert data["consistency_analyzed_at"] is None
+        assert data["consistency_last_error"] is None
+        assert data["relationships"] == []
+
+    def test_successful_reanalyze_sets_analyzed_at_with_no_error(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeCleanConsistencyAnalyzer)
+        run_id = _upload(client).json()["run_id"]
+
+        response = client.post(f"/runs/{run_id}/reanalyze-consistency")
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+
+        data = client.get(f"/runs/{run_id}/consistency").json()
+        assert data["consistency_analyzed_at"] is not None
+        assert data["consistency_last_error"] is None
+
+    def test_crash_is_reported_as_failed_not_a_clean_zero_result(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeCrashingConsistencyAnalyzer)
+        run_id = _upload(client).json()["run_id"]
+
+        response = client.post(f"/runs/{run_id}/reanalyze-consistency")
+        assert response.status_code == 200  # the HTTP request itself succeeded
+        body = response.json()
+        assert body["status"] == "failed"
+        assert "simulated consistency analyzer crash" in body["message"]
+
+        # The crash must be visible on a later GET too, not just in the
+        # one-shot POST response -- a page reload must not look "clean".
+        data = client.get(f"/runs/{run_id}/consistency").json()
+        assert data["consistency_analyzed_at"] is not None
+        assert data["consistency_last_error"] is not None
+        assert "simulated consistency analyzer crash" in data["consistency_last_error"]
+        assert data["relationships"] == []  # still empty -- but now known-untrustworthy, not "clean"
+
+    def test_too_few_requirements_reports_that_status_not_failed(self, api_env):
+        client, _ = api_env
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["ID", "Requirement"])
+        ws.append(["R1", "The system shall log every connection attempt."])
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        run_id = _upload(client, filename="one_row.xlsx", content=buffer.getvalue()).json()["run_id"]
+
+        response = client.post(f"/runs/{run_id}/reanalyze-consistency")
+        assert response.json()["status"] == "too_few_requirements"
+
+        # A deliberate "nothing to compare" is still a completed attempt,
+        # not an unresolved "never analyzed" -- consistency_analyzed_at is
+        # set, just with no error.
+        data = client.get(f"/runs/{run_id}/consistency").json()
+        assert data["consistency_analyzed_at"] is not None
+        assert data["consistency_last_error"] is None

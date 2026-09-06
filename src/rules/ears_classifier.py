@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from rules.word_lists import load_word_list
+
 _PATTERNS_PATH = (
     Path(__file__).resolve().parent.parent.parent / "data" / "rules" / "ears_patterns.json"
 )
@@ -72,8 +74,12 @@ _LEADING_WORD = re.compile(r"[A-Za-z]+")
 # requirement author reaching for "will"/"must"/"should"/"may" instead is a
 # specific, common, fixable mistake -- worth naming precisely (so a
 # rejection reads "used 'will' instead of 'shall'", not just "unclear")
-# rather than lumping it in with genuinely unstructured text.
-_WEAK_MODAL = re.compile(r"\b(will|must|should|may)\b", re.IGNORECASE)
+# rather than lumping it in with genuinely unstructured text. The word list
+# itself lives in data/rules/word_lists.xlsx's "weak_modals" sheet, not
+# hardcoded here -- see src/rules/word_lists.py.
+_WEAK_MODAL = re.compile(
+    r"\b(" + "|".join(load_word_list("weak_modals")) + r")\b", re.IGNORECASE
+)
 
 
 def _leading_word(segment: str) -> str:
