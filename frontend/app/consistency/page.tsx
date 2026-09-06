@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { apiService } from "@/services/api";
 import { useActiveRun } from "@/context/ActiveRunContext";
 import { motion } from "framer-motion";
@@ -15,8 +15,25 @@ import {
   AlertCircle,
   Copy,
   FileText,
+  Grid3x3,
+  ListChecks,
 } from "lucide-react";
-import { ConsistencyResponse, RequirementRelationship } from "@/types";
+import { ConsistencyResponse, RequirementRelationship, ConsistencyMatrixCell } from "@/types";
+
+// Cell coloring per the guide's ask: duplicate/contradiction in red,
+// similar in amber (kept as its own color, same convention as everywhere
+// else in this app, rather than folding it into either red or green),
+// independent in green.
+const MATRIX_CELL_STYLE: Record<string, string> = {
+  duplicate: "bg-[#FF4D4F]",
+  contradiction: "bg-[#FF4D4F]",
+  similar: "bg-[#FFB300]",
+  independent: "bg-[#00C853]/40",
+};
+
+function pairKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
 
 const getRelationshipBadge = (type: string) => {
   switch (type) {
@@ -72,12 +89,29 @@ export default function ConsistencyPage() {
     enabled: !!activeRunId,
   });
 
+  const { data: matrixData, refetch: refetchMatrix } = useQuery({
+    queryKey: ["consistency_matrix", activeRunId],
+    queryFn: () => apiService.getConsistencyMatrix(activeRunId!),
+    enabled: !!activeRunId,
+  });
+
+  // O(1) cell lookup by display id pair, instead of scanning cells[] once
+  // per grid square (n^2 lookups over an n(n-1)/2 array otherwise).
+  const cellByPair = useMemo(() => {
+    const map = new Map<string, ConsistencyMatrixCell>();
+    for (const cell of matrixData?.cells || []) {
+      map.set(pairKey(cell.display_id_1, cell.display_id_2), cell);
+    }
+    return map;
+  }, [matrixData]);
+
   const handleReanalyze = async () => {
     if (!activeRunId) return;
     try {
       const result = await apiService.reanalyzeConsistency(activeRunId);
       setLastMessage({ text: result.message, isWarning: result.status !== "completed" });
       refetch();
+      refetchMatrix();
     } catch (error: any) {
       console.error("Failed to reanalyze consistency:", error);
       setLastMessage({
@@ -317,7 +351,108 @@ export default function ConsistencyPage() {
         </div>
       </motion.div>
 
-      {/* Consistency Matrix */}
+      {/* Consistency Matrix -- the real N x N grid: every requirement
+          number on both axes, every cell colored by relationship (red =
+          duplicate/contradiction, amber = similar, green = independent).
+          Reuses the same analysis the Re-analyze button above already
+          computed -- doesn't call the LLM or recompute anything itself. */}
+      <motion.div
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="drdo-card p-6"
+      >
+        <div className="pb-4 border-b border-[#243244] mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 className="text-base font-bold text-[#F5F7FA] flex items-center gap-2">
+            <Grid3x3 className="w-4 h-4 text-[#1EA7FF]" />
+            Consistency Matrix
+          </h2>
+          <div className="flex items-center gap-3 text-[10px] text-[#8FA3BF]">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-[#FF4D4F] inline-block" /> Duplicate / Contradiction
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-[#FFB300] inline-block" /> Similar
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-[#00C853]/40 inline-block" /> Independent
+            </span>
+          </div>
+        </div>
+
+        {analysisState !== "ok" ? (
+          <div className="py-12 text-center text-[#8FA3BF] text-sm">
+            {analysisState === "never_run"
+              ? 'Not analyzed yet -- click "Re-analyze" above to build the matrix.'
+              : "The last analysis attempt failed -- see the banner above. The matrix cannot be trusted until you re-analyze."}
+          </div>
+        ) : matrixData && matrixData.requirements.length >= 2 ? (
+          <div className="overflow-auto max-h-[560px] rounded-lg border border-[#243244]">
+            <table className="border-collapse text-[10px]">
+              <thead>
+                <tr>
+                  <th className="sticky top-0 left-0 z-20 bg-[#0F172A] border border-[#243244] w-9 h-9" />
+                  {matrixData.requirements.map((colReq) => (
+                    <th
+                      key={colReq.id}
+                      title={`#${colReq.display_id}: ${colReq.text}`}
+                      className="sticky top-0 z-10 bg-[#0F172A] border border-[#243244] w-9 h-9 font-mono font-bold text-[#8FA3BF] text-center"
+                    >
+                      {colReq.display_id}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {matrixData.requirements.map((rowReq) => (
+                  <tr key={rowReq.id}>
+                    <th
+                      title={`#${rowReq.display_id}: ${rowReq.text}`}
+                      className="sticky left-0 z-10 bg-[#0F172A] border border-[#243244] w-9 h-9 font-mono font-bold text-[#8FA3BF] text-center"
+                    >
+                      {rowReq.display_id}
+                    </th>
+                    {matrixData.requirements.map((colReq) => {
+                      if (rowReq.id === colReq.id) {
+                        return (
+                          <td
+                            key={colReq.id}
+                            title={`#${rowReq.display_id}: ${rowReq.text}`}
+                            className="border border-[#243244] w-9 h-9 bg-[#243244]"
+                          />
+                        );
+                      }
+                      const cell = cellByPair.get(pairKey(rowReq.display_id, colReq.display_id));
+                      const type = cell?.relationship_type || "independent";
+                      const tooltip = cell
+                        ? `#${rowReq.display_id} vs #${colReq.display_id}: ${type}${
+                            cell.similarity_score != null ? ` (${(cell.similarity_score * 100).toFixed(0)}%)` : ""
+                          }${cell.reason ? ` -- ${cell.reason}` : ""}`
+                        : `#${rowReq.display_id} vs #${colReq.display_id}: independent`;
+                      return (
+                        <td
+                          key={colReq.id}
+                          title={tooltip}
+                          className={`border border-[#243244] w-9 h-9 ${MATRIX_CELL_STYLE[type]} hover:opacity-70 transition cursor-default`}
+                        />
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="py-12 text-center text-[#8FA3BF] text-sm">
+            Need at least 2 requirements to build a matrix.
+          </div>
+        )}
+      </motion.div>
+
+      {/* Flagged Relationships -- the pairs the analysis actually flagged
+          (duplicate/similar/contradiction), as a readable list. The grid
+          above shows the whole set at a glance; this is the detail view
+          for exactly the cells that aren't green. */}
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -327,7 +462,7 @@ export default function ConsistencyPage() {
         <div className="pb-4 border-b border-[#243244] mb-4">
           <h2 className="text-base font-bold text-[#F5F7FA] flex items-center gap-2">
             <GitBranch className="w-4 h-4 text-[#1EA7FF]" />
-            Consistency Matrix
+            Flagged Relationships
           </h2>
         </div>
 

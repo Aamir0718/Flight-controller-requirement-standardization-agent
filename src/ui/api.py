@@ -627,6 +627,76 @@ def get_run_consistency(run_id: int) -> dict:
         conn.close()
 
 
+@app.get("/runs/{run_id}/consistency-matrix")
+def get_consistency_matrix(run_id: int) -> dict:
+    """The full requirement x requirement grid (every pair, not just the
+    ones flagged duplicate/similar/contradiction -- see /runs/{run_id}/
+    consistency for that filtered list) -- X axis and Y axis both list
+    every requirement's display number, so a human can scan the whole set
+    at once instead of reading a row-per-flagged-pair table.
+
+    Reuses whatever the last "Re-analyze" (POST .../reanalyze-consistency)
+    already computed and saved -- does NOT recompute or call the LLM
+    itself. Any pair not in the saved relationships table is "independent"
+    (no LLM/embedding call needed to know that -- see the guard below).
+
+    Returns cells=[] (with consistency_analyzed_at/consistency_last_error
+    still populated) when analysis has never run or its last run failed --
+    same "don't dress up unknown as a clean 0-relationships grid" rule as
+    GET /runs/{run_id}/consistency, since defaulting every un-flagged pair
+    to green "independent" would be exactly that mistake if analysis never
+    actually ran.
+    """
+    conn = db.connect()
+    try:
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+
+        requirements = db.get_requirements_for_run(conn, run_id)
+        req_axis = [
+            {"id": r["id"], "display_id": r["sequence_in_run"] + 1, "text": r["recommended_text"]}
+            for r in requirements
+        ]
+
+        analyzed_at = run.get("consistency_analyzed_at")
+        last_error = run.get("consistency_last_error")
+        cells: list[dict] = []
+
+        if analyzed_at and not last_error and len(requirements) >= 2:
+            relationships = db.get_requirement_relationships(conn, run_id)
+            rel_by_pair = {
+                tuple(sorted((rel["req_id_1"], rel["req_id_2"]))): rel for rel in relationships
+            }
+            display_by_id = {r["id"]: r["sequence_in_run"] + 1 for r in requirements}
+
+            ids = [r["id"] for r in requirements]
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair_key = tuple(sorted((ids[i], ids[j])))
+                    rel = rel_by_pair.get(pair_key)
+                    cells.append({
+                        "req_id_1": pair_key[0],
+                        "req_id_2": pair_key[1],
+                        "display_id_1": display_by_id[pair_key[0]],
+                        "display_id_2": display_by_id[pair_key[1]],
+                        "relationship_type": rel["relationship_type"] if rel else "independent",
+                        "similarity_score": rel["similarity_score"] if rel else None,
+                        "reason": rel["reason"] if rel else None,
+                    })
+
+        return {
+            "run_id": run_id,
+            "total_requirements": len(requirements),
+            "requirements": req_axis,
+            "cells": cells,
+            "consistency_analyzed_at": analyzed_at,
+            "consistency_last_error": last_error,
+        }
+    finally:
+        conn.close()
+
+
 @app.post("/runs/{run_id}/reanalyze-consistency")
 def reanalyze_consistency(run_id: int) -> dict:
     """Triggers re-analysis of consistency for a run."""

@@ -5,6 +5,7 @@ import {
   Run,
   UploadResponse,
   ConsistencyResponse,
+  ConsistencyMatrixResponse,
   RunProgress,
   EmbeddingMatrixResponse,
 } from "@/types";
@@ -118,6 +119,17 @@ export const apiService = {
 
   async getRunConsistency(runId: number): Promise<ConsistencyResponse> {
     const { data } = await apiClient.get<ConsistencyResponse>(`/runs/${runId}/consistency`);
+    return data;
+  },
+
+  /** Every requirement x requirement pair (not just flagged ones) --
+   * reuses whatever the last reanalyzeConsistency() call already computed
+   * and saved, no new LLM/embedding call. cells is empty when analysis
+   * has never run or its last run failed, same as getRunConsistency(). */
+  async getConsistencyMatrix(runId: number): Promise<ConsistencyMatrixResponse> {
+    const { data } = await apiClient.get<ConsistencyMatrixResponse>(
+      `/runs/${runId}/consistency-matrix`
+    );
     return data;
   },
 
