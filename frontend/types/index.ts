@@ -142,6 +142,34 @@ export interface ConsistencyResponse {
   consistency_last_error: string | null;
 }
 
+export interface ConsistencyMatrixAxisRequirement {
+  id: number;
+  display_id: number;
+  text: string;
+}
+
+export interface ConsistencyMatrixCell {
+  req_id_1: number;
+  req_id_2: number;
+  display_id_1: number;
+  display_id_2: number;
+  relationship_type: "duplicate" | "similar" | "contradiction" | "independent";
+  similarity_score: number | null;
+  reason: string | null;
+}
+
+export interface ConsistencyMatrixResponse {
+  run_id: number;
+  total_requirements: number;
+  requirements: ConsistencyMatrixAxisRequirement[];
+  // Empty when analysis has never run or its last run failed -- same
+  // never-run/failed/ok distinction as ConsistencyResponse, so the matrix
+  // never defaults an unanalyzed pair to a false "independent" (green).
+  cells: ConsistencyMatrixCell[];
+  consistency_analyzed_at: string | null;
+  consistency_last_error: string | null;
+}
+
 export interface StageEvent {
   seq: number;
   ts: string;

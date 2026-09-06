@@ -566,3 +566,88 @@ class TestConsistencyAnalysisState:
         data = client.get(f"/runs/{run_id}/consistency").json()
         assert data["consistency_analyzed_at"] is not None
         assert data["consistency_last_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# GET /runs/{run_id}/consistency-matrix -- the full requirement x
+# requirement grid (every pair, not just flagged ones).
+# ---------------------------------------------------------------------------
+
+
+class TestConsistencyMatrix:
+    def test_never_analyzed_returns_no_cells(self, api_env):
+        client, _ = api_env
+        run_id = _upload(client).json()["run_id"]
+
+        data = client.get(f"/runs/{run_id}/consistency-matrix").json()
+
+        assert data["cells"] == []
+        assert data["consistency_analyzed_at"] is None
+        assert len(data["requirements"]) == 2
+
+    def test_crashed_analysis_returns_no_cells_not_a_false_green_grid(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeCrashingConsistencyAnalyzer)
+        run_id = _upload(client).json()["run_id"]
+        client.post(f"/runs/{run_id}/reanalyze-consistency")
+
+        data = client.get(f"/runs/{run_id}/consistency-matrix").json()
+
+        assert data["cells"] == []
+        assert data["consistency_last_error"] is not None
+
+    def test_analyzed_run_returns_every_pair_not_just_flagged_ones(self, api_env, monkeypatch):
+        client, _ = api_env
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeCleanConsistencyAnalyzer)
+        run_id = _upload(client).json()["run_id"]  # 2 requirements -> exactly 1 pair
+        client.post(f"/runs/{run_id}/reanalyze-consistency")
+
+        data = client.get(f"/runs/{run_id}/consistency-matrix").json()
+
+        assert len(data["requirements"]) == 2
+        assert len(data["cells"]) == 1  # n*(n-1)/2 for n=2
+        assert data["cells"][0]["relationship_type"] == "independent"
+        assert data["cells"][0]["display_id_1"] == 1
+        assert data["cells"][0]["display_id_2"] == 2
+
+    def test_flagged_pair_appears_with_its_real_relationship_type(self, api_env, monkeypatch):
+        client, _ = api_env
+
+        class _FakeDuplicateAnalyzer:
+            def __init__(self, *a, **kw):
+                pass
+
+            def analyze_requirements(self, run_id, requirements):
+                from consistency.analyzer import (
+                    ConsistencyResult,
+                    RelationshipType,
+                    RequirementRelationship,
+                )
+
+                ids = [r["id"] for r in requirements]
+                return ConsistencyResult(
+                    run_id=run_id,
+                    total_requirements=len(requirements),
+                    relationships=[
+                        RequirementRelationship(
+                            req_id_1=ids[0], req_id_2=ids[1],
+                            relationship_type=RelationshipType.DUPLICATE,
+                            similarity_score=1.0, confidence=1.0,
+                            reason="Very high semantic similarity indicates duplicate requirement.",
+                        )
+                    ],
+                    summary={"duplicates": 1, "similar": 0, "contradictions": 0, "independent": 0},
+                )
+
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeDuplicateAnalyzer)
+        run_id = _upload(client).json()["run_id"]
+        client.post(f"/runs/{run_id}/reanalyze-consistency")
+
+        data = client.get(f"/runs/{run_id}/consistency-matrix").json()
+        assert len(data["cells"]) == 1
+        assert data["cells"][0]["relationship_type"] == "duplicate"
+
+    def test_unknown_run_id_returns_404(self, api_env):
+        client, _ = api_env
+        response = client.get("/runs/999/consistency-matrix")
+        assert response.status_code == 404

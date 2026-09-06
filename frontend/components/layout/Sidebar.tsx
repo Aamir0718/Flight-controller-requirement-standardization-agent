@@ -13,7 +13,8 @@ import {
   Settings,
   ShieldCheck,
   GitBranch,
-  Ruler
+  Ruler,
+  ListChecks
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ const navItems = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Upload Workbook", href: "/upload", icon: UploadCloud },
   { name: "Requirement Review", href: "/review", icon: FileCheck2 },
+  { name: "Requirements List", href: "/requirements-list", icon: ListChecks },
   { name: "Comparison Matrix", href: "/compare", icon: Columns3 },
   { name: "Consistency Analysis", href: "/consistency", icon: GitBranch },
   { name: "Embedding Distance", href: "/embedding-distance", icon: Ruler },
