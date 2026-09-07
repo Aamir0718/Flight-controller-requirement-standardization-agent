@@ -545,6 +545,39 @@ class TestConsistencyAnalysisState:
         data = client.get(f"/runs/{run_id}/consistency").json()
         assert data["consistency_analyzed_at"] is not None
         assert data["consistency_last_error"] is None
+        assert data["consistency_contradiction_check_skipped"] is False
+
+    def test_contradiction_check_skipped_persists_across_a_reload(self, api_env, monkeypatch):
+        class _FakeSkippedContradictionAnalyzer:
+            def __init__(self, *a, **kw):
+                pass
+
+            def analyze_requirements(self, run_id, requirements):
+                from consistency.analyzer import ConsistencyResult
+
+                return ConsistencyResult(
+                    run_id=run_id,
+                    total_requirements=len(requirements),
+                    relationships=[],
+                    summary={"duplicates": 0, "similar": 0, "contradictions": 0, "independent": 0},
+                    contradiction_check_skipped=True,
+                )
+
+            def compute_pairwise_similarities(self, requirements):
+                return _fake_pairwise_similarities(requirements)
+
+        client, _ = api_env
+        monkeypatch.setattr(api, "ConsistencyAnalyzer", _FakeSkippedContradictionAnalyzer)
+        run_id = _upload(client).json()["run_id"]
+
+        response = client.post(f"/runs/{run_id}/reanalyze-consistency")
+        assert response.json()["contradiction_check_skipped"] is True
+
+        # The whole point: this must still be visible on a completely
+        # separate GET (a page reload), not just in the one-shot POST
+        # response from the click that triggered it.
+        data = client.get(f"/runs/{run_id}/consistency").json()
+        assert data["consistency_contradiction_check_skipped"] is True
 
     def test_crash_is_reported_as_failed_not_a_clean_zero_result(self, api_env, monkeypatch):
         client, _ = api_env

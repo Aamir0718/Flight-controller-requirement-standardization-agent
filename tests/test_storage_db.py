@@ -452,11 +452,13 @@ class TestSchemaMigration:
         assert fetched[0]["accurate_violations"] == []
         assert fetched[0]["accurate_score_error_message"] is None
         # The legacy `runs` table above predates consistency_analyzed_at/
-        # consistency_last_error too -- same ALTER-TABLE migration guard
-        # must add those without erroring or losing the row.
+        # consistency_last_error/consistency_contradiction_check_skipped
+        # too -- same ALTER-TABLE migration guard must add those without
+        # erroring or losing the row.
         run = db.get_run(conn, 1)
         assert run["consistency_analyzed_at"] is None
         assert run["consistency_last_error"] is None
+        assert not run["consistency_contradiction_check_skipped"]
         conn.close()
 
 
@@ -550,6 +552,24 @@ class TestConsistencyAnalysisOutcome:
         db.record_consistency_analysis_outcome(conn, run_id, error=None)
         run = db.get_run(conn, run_id)
         assert run["consistency_last_error"] is None
+
+    def test_fresh_run_has_no_contradiction_check_skipped_flag(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        run = db.get_run(conn, run_id)
+        assert not run["consistency_contradiction_check_skipped"]
+
+    def test_records_contradiction_check_skipped(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.record_consistency_analysis_outcome(conn, run_id, error=None, contradiction_check_skipped=True)
+        run = db.get_run(conn, run_id)
+        assert run["consistency_contradiction_check_skipped"] == 1
+
+    def test_a_later_run_with_llm_reachable_clears_the_skipped_flag(self, conn):
+        run_id = db.create_run(conn, file_name="a.xlsx")
+        db.record_consistency_analysis_outcome(conn, run_id, error=None, contradiction_check_skipped=True)
+        db.record_consistency_analysis_outcome(conn, run_id, error=None, contradiction_check_skipped=False)
+        run = db.get_run(conn, run_id)
+        assert not run["consistency_contradiction_check_skipped"]
 
 
 # ---------------------------------------------------------------------------

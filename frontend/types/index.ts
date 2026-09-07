@@ -140,6 +140,12 @@ export interface ConsistencyResponse {
   // above as a real 100%-consistent result in that case.
   consistency_analyzed_at: string | null;
   consistency_last_error: string | null;
+  // True if the LLM was unreachable during the last successful analysis,
+  // so contradiction pairs may be sitting un-escalated (or fully
+  // un-checked) rather than genuinely confirmed not-a-contradiction.
+  // Persists across a page reload -- unlike the one-shot message
+  // reanalyzeConsistency() returns right after the click.
+  consistency_contradiction_check_skipped: boolean;
 }
 
 export interface ConsistencyMatrixAxisRequirement {

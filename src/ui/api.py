@@ -344,7 +344,10 @@ def _run_consistency_analysis(conn: db.sqlite3.Connection, run_id: int) -> dict:
             )
 
         print(f"Consistency analysis completed for run {run_id}: {len(result.relationships)} relationships found")
-        db.record_consistency_analysis_outcome(conn, run_id, error=None)
+        db.record_consistency_analysis_outcome(
+            conn, run_id, error=None,
+            contradiction_check_skipped=result.contradiction_check_skipped,
+        )
         return {
             "crashed": False, "error": None,
             "too_few_requirements": False,
@@ -622,6 +625,15 @@ def get_run_consistency(run_id: int) -> dict:
             # apart. See db.record_consistency_analysis_outcome().
             "consistency_analyzed_at": run.get("consistency_analyzed_at"),
             "consistency_last_error": run.get("consistency_last_error"),
+            # Persisted so this survives a page reload -- previously only
+            # visible in the one-shot response right after clicking
+            # Re-analyze. True means the LLM was unreachable during the
+            # last analysis, so contradiction pairs may be sitting
+            # un-escalated as "similar" (or fully un-checked) rather than
+            # genuinely confirmed not-a-contradiction.
+            "consistency_contradiction_check_skipped": bool(
+                run.get("consistency_contradiction_check_skipped")
+            ),
         }
     finally:
         conn.close()

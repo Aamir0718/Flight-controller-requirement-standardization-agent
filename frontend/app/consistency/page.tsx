@@ -288,6 +288,24 @@ export default function ConsistencyPage() {
           </p>
         </div>
       )}
+      {/* Persists across a reload -- unlike lastMessage above, which only
+          shows right after clicking Re-analyze this session. Contradiction
+          detection needs the LLM; duplicate/similar do not, so this run's
+          duplicate/similar/independent numbers are still trustworthy even
+          when this banner is showing -- only the Contradiction count (and
+          any purple cells in the matrix) can't be trusted yet. */}
+      {analysisState === "ok" && consistencyData?.consistency_contradiction_check_skipped && (
+        <div className="p-3.5 rounded-xl border flex items-start gap-2.5 text-xs bg-[#FFB300]/10 border-[#FFB300]/30 text-[#FFB300]">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            The last analysis could not check for contradictions -- the AI endpoint was
+            unreachable at the time. Duplicate/Similar/Independent results below are still
+            accurate (they never need the AI), but the Contradiction count is NOT trustworthy --
+            some pairs shown as yellow &quot;Similar&quot; may actually be contradictions that were
+            never checked. Get the AI endpoint reachable and click &quot;Re-analyze&quot; to check.
+          </p>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <motion.div
