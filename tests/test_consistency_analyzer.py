@@ -1,7 +1,11 @@
-"""Tests for src/consistency/analyzer.py -- specifically that contradiction
-detection (the only part of consistency analysis that needs the LLM)
-degrades gracefully when Ollama isn't reachable, rather than hanging or
-crashing the whole analysis.
+"""Tests for src/consistency/analyzer.py:
+
+- The mechanical negation-based contradiction check (_is_negation_
+  contradiction) -- catches "same requirement, one side says 'not'"
+  entirely without the LLM, so it works even when the LLM is unreachable.
+- That LLM-based contradiction detection (for contradictions that AREN'T
+  a simple negation, e.g. "enable" vs "disable") degrades gracefully when
+  it isn't reachable, rather than hanging or crashing the whole analysis.
 
 Duplicate/similarity detection is pure embeddings (sentence-transformers or
 its TF-IDF fallback) and never touches the LLM at all -- these tests don't
@@ -14,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from consistency.analyzer import ConsistencyAnalyzer, RelationshipType
+from consistency.analyzer import ConsistencyAnalyzer, RelationshipType, _is_negation_contradiction
 
 # Near-identical wording so cosine similarity clears a permissive
 # threshold under either sentence-transformers or the TF-IDF fallback --
@@ -221,4 +225,101 @@ class TestContradictionCheckDisabled:
         assert fake_client.check_reachable_calls == 0
         # Disabled by configuration, not "skipped due to failure" -- an
         # important distinction for what message a human sees.
+        assert result.contradiction_check_skipped is False
+
+
+class TestNegationContradiction:
+    """_is_negation_contradiction() -- the mechanical "same requirement,
+    one side says 'not'" check. Runs before the LLM check in
+    _classify_pair() specifically so it still works when the LLM is
+    unreachable, which is exactly the situation this exists for: this
+    shape of contradiction (a word inserted/removed) is also the one most
+    likely to accidentally clear duplicate_threshold and get mislabeled
+    "Duplicate" if nothing catches it first.
+    """
+
+    def test_detects_a_single_inserted_not(self):
+        assert _is_negation_contradiction(
+            "The aircraft shall return to the configured home position.",
+            "The aircraft shall not return to the configured home position.",
+        )
+
+    def test_detects_never_and_no_and_cannot(self):
+        assert _is_negation_contradiction("The valve shall open.", "The valve shall never open.")
+        assert _is_negation_contradiction("The system shall log data.", "The system shall log no data.")
+        assert _is_negation_contradiction(
+            "The pump shall activate on failure.", "The pump shall cannot activate on failure."
+        )
+
+    def test_is_case_insensitive_and_whitespace_tolerant(self):
+        assert _is_negation_contradiction(
+            "The System SHALL Return Home.", "the system shall  not   return home."
+        )
+
+    def test_unrelated_texts_are_not_flagged(self):
+        assert not _is_negation_contradiction(
+            "The system shall log connections.", "The autopilot shall disengage on overforce."
+        )
+
+    def test_identical_texts_with_the_same_negation_are_not_flagged(self):
+        # Same negation COUNT on both sides -- not a negation-based
+        # difference (these are just duplicates, or identical).
+        assert not _is_negation_contradiction(
+            "The system shall not log connections.", "The system shall not log connections."
+        )
+
+    def test_a_different_value_is_not_a_negation_contradiction(self):
+        # Both negated once, but they genuinely say different things
+        # (50 psi vs 60 psi) -- not what this check is for.
+        assert not _is_negation_contradiction(
+            "The system shall never exceed 50 psi.", "The system shall never exceed 60 psi."
+        )
+
+    def test_a_different_word_is_not_a_negation_contradiction(self):
+        # Both negated once, but "below"/"above" differ -- a real
+        # contradiction, just not a negation-shaped one; that's the LLM
+        # check's job, not this mechanical one's.
+        assert not _is_negation_contradiction(
+            "The valve shall not open below 10 psi.", "The valve shall not open above 10 psi."
+        )
+
+    def test_classified_as_contradiction_even_with_the_llm_unreachable(self):
+        # The actual regression this guards against (see the screenshot
+        # this was built from): "shall return" vs "shall not return" is
+        # similar enough to clear duplicate_threshold, and with the LLM
+        # unreachable there'd be nothing left to catch it as anything but
+        # "Duplicate" without this mechanical check running first.
+        analyzer = ConsistencyAnalyzer(
+            settings={
+                "consistency": {
+                    "duplicate_threshold": 0.95,
+                    "similarity_threshold": 0.65,
+                    "enable_contradiction_check": True,
+                }
+            }
+        )
+        analyzer._llm_client = _FakeUnreachableClient()
+
+        text = (
+            "When communication with the ground station is lost for more than 15 seconds, "
+            "the aircraft shall return to the configured home position."
+        )
+        negated = text.replace("shall return", "shall not return")
+        result = analyzer.analyze_requirements(
+            run_id=1,
+            requirements=[{"id": 1, "recommended_text": text}, {"id": 2, "recommended_text": negated}],
+        )
+
+        assert len(result.relationships) == 1
+        rel = result.relationships[0]
+        assert rel.similarity_score >= 0.65  # clears similarity_threshold -- the two are near-identical
+        assert rel.relationship_type == RelationshipType.CONTRADICTION
+        # The mechanical check resolves this pair before _is_llm_reachable()
+        # is ever called -- with only this one pair in the run, the LLM
+        # was never actually needed, so "skipped" (which specifically
+        # means "needed it and it wasn't there") is correctly False, not
+        # True. A run with OTHER pairs that DO need the LLM would still
+        # report skipped=True for those (see
+        # test_contradiction_check_skipped_flag_is_set) -- this pair
+        # just never becomes one of them.
         assert result.contradiction_check_skipped is False
