@@ -6,6 +6,7 @@ Falls back to TF-IDF if sentence-transformers is blocked by system security poli
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
@@ -16,6 +17,49 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from config import get_settings
 from llm.local_llm_client import LocalLLMClient
+
+# Catches the single most common contradiction pattern -- the exact same
+# requirement, with a negation word added or removed ("the aircraft shall
+# return..." vs "the aircraft shall NOT return...") -- entirely
+# mechanically, with no LLM call. This matters because it's also the
+# pattern the LLM-based check can miss the chance to even run on: these
+# pairs are often so textually close they clear duplicate_threshold, and
+# it's the one contradiction shape a human can construct by literally
+# inserting one word, making it the most likely to show up by accident
+# (or by a deliberate test) in a real requirement set. Doesn't replace
+# the LLM check below -- reworded contradictions ("enable" vs "disable")
+# still need it -- but this one specific, extremely common shape never
+# has to wait for (or depend on) the LLM being reachable at all.
+_NEGATION_WORDS = re.compile(r"\b(not|never|no|cannot)\b", re.IGNORECASE)
+
+
+def _strip_negation_words(text: str) -> str:
+    """Removes standalone negation words and collapses the resulting
+    whitespace/punctuation gaps, so "shall not return" and "shall
+    return" normalize to the same string."""
+    stripped = _NEGATION_WORDS.sub(" ", text.lower())
+    # Collapse doubled spaces and space-before-punctuation left behind by
+    # removing a word (e.g. "shall  return" -> "shall return").
+    stripped = re.sub(r"\s+", " ", stripped)
+    stripped = re.sub(r"\s+([.,;:])", r"\1", stripped)
+    return stripped.strip()
+
+
+def _is_negation_contradiction(text1: str, text2: str) -> bool:
+    """True if text1/text2 are the same requirement except one has a
+    negation word (not/never/no/cannot) the other doesn't -- e.g. "the
+    aircraft shall return..." vs "the aircraft shall not return...".
+    Requires the negation COUNT to actually differ (two texts that both
+    say "not" the same number of times aren't a negation-based
+    difference) and everything else to match exactly once negation words
+    are stripped out.
+    """
+    count1 = len(_NEGATION_WORDS.findall(text1))
+    count2 = len(_NEGATION_WORDS.findall(text2))
+    if count1 == count2:
+        return False
+    return _strip_negation_words(text1) == _strip_negation_words(text2)
+
 
 _CONTRADICTION_SCHEMA = {
     "type": "object",
@@ -336,10 +380,12 @@ class ConsistencyAnalyzer:
         check would never even run on it -- silently hiding the more
         serious defect (two requirements that actively conflict) behind
         the more benign one (near-identical wording). So: any pair that
-        clears similarity_threshold gets the contradiction check FIRST,
-        regardless of how high its similarity is; only once that comes
-        back negative (or can't be checked) does duplicate-vs-similar
-        get decided.
+        clears similarity_threshold gets checked for contradiction FIRST,
+        regardless of how high its similarity is -- first the mechanical
+        negation check (no LLM, always available), then the LLM check for
+        subtler (reworded) contradictions if that didn't already catch
+        it; only once both come back negative (or can't be checked) does
+        duplicate-vs-similar get decided.
 
         Args:
             text1: First requirement text
@@ -350,6 +396,19 @@ class ConsistencyAnalyzer:
             RequirementRelationship with classification
         """
         if similarity >= self.similarity_threshold:
+            if _is_negation_contradiction(text1, text2):
+                return RequirementRelationship(
+                    req_id_1=0,
+                    req_id_2=0,
+                    relationship_type=RelationshipType.CONTRADICTION,
+                    similarity_score=similarity,
+                    confidence=1.0,  # Purely mechanical -- not a judgement call
+                    reason=(
+                        "Same requirement, but one negates the other ('not'/'never'/'no'/"
+                        "'cannot') -- direct textual contradiction, detected without the AI."
+                    ),
+                )
+
             if self.enable_contradiction_check and self._is_llm_reachable():
                 is_contradiction, reason = self._check_contradiction(text1, text2)
                 if is_contradiction:
