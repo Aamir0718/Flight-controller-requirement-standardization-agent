@@ -20,13 +20,15 @@ import {
 } from "lucide-react";
 import { ConsistencyResponse, RequirementRelationship, ConsistencyMatrixCell } from "@/types";
 
-// Cell coloring per the guide's ask: duplicate/contradiction in red,
-// similar in amber (kept as its own color, same convention as everywhere
-// else in this app, rather than folding it into either red or green),
+// Cell coloring: duplicate in red, contradiction in purple (kept
+// distinct from duplicate's red -- both used to share red, which made it
+// impossible to tell "identical wording" apart from "actively
+// conflicting" just by looking at the grid, even though the underlying
+// classification already knows the difference), similar in amber,
 // independent in green.
 const MATRIX_CELL_STYLE: Record<string, string> = {
   duplicate: "bg-[#FF4D4F]",
-  contradiction: "bg-[#FF4D4F]",
+  contradiction: "bg-[#8B5CF6]",
   similar: "bg-[#FFB300]",
   independent: "bg-[#00C853]/40",
 };
@@ -63,8 +65,12 @@ const getRelationshipBadge = (type: string) => {
       };
     case "contradiction":
       return {
+        // Distinct from Duplicate's red -- same reasoning as the matrix's
+        // MATRIX_CELL_STYLE above: sharing a color made "identical
+        // wording" indistinguishable from "actively conflicting" at a
+        // glance.
         label: "Contradiction",
-        color: "bg-[#FF4D4F]/15 text-[#FF4D4F] border-[#FF4D4F]/30",
+        color: "bg-[#8B5CF6]/15 text-[#8B5CF6] border-[#8B5CF6]/30",
         icon: XCircle,
         action: "Manual Review Required",
       };
@@ -382,9 +388,12 @@ export default function ConsistencyPage() {
               Each cell shows the similarity % between that pair of requirements.
             </p>
           </div>
-          <div className="flex items-center gap-3 text-[10px] text-[#8FA3BF]">
+          <div className="flex items-center gap-3 text-[10px] text-[#8FA3BF] flex-wrap">
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[#FF4D4F] inline-block" /> Duplicate / Contradiction
+              <span className="w-2.5 h-2.5 rounded-sm bg-[#FF4D4F] inline-block" /> Duplicate
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-[#8B5CF6] inline-block" /> Contradiction
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-sm bg-[#FFB300] inline-block" /> Similar
