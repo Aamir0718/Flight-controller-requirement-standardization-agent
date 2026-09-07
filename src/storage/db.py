@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS runs (
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
     consistency_analyzed_at TEXT,
-    consistency_last_error TEXT
+    consistency_last_error TEXT,
+    consistency_contradiction_check_skipped INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS requirements (
@@ -136,6 +137,13 @@ _REQUIREMENTS_MIGRATIONS = [
 _RUNS_MIGRATIONS = [
     ("consistency_analyzed_at", "TEXT"),
     ("consistency_last_error", "TEXT"),
+    # Whether the LAST successful analysis actually ran the LLM
+    # contradiction check or silently skipped it (LLM unreachable at the
+    # time) -- previously only reported in the one-shot POST .../
+    # reanalyze-consistency response, invisible again after a page
+    # reload, which let "0 contradictions" on screen look identical to
+    # "contradiction detection never actually ran" with no way to tell.
+    ("consistency_contradiction_check_skipped", "INTEGER"),
 ]
 
 
@@ -269,7 +277,10 @@ def update_run_status(
 
 
 def record_consistency_analysis_outcome(
-    conn: sqlite3.Connection, run_id: int, error: str | None
+    conn: sqlite3.Connection,
+    run_id: int,
+    error: str | None,
+    contradiction_check_skipped: bool = False,
 ) -> None:
     """Records that a consistency-analysis attempt (src/ui/api.py's
     _run_consistency_analysis()) just happened for this run, successfully
@@ -278,10 +289,19 @@ def record_consistency_analysis_outcome(
     attempted" -- so GET /runs/{run_id}/consistency can tell a human
     "analysis has never run for this run" apart from "it ran and found
     nothing" or "it ran and failed", which otherwise all look identical
-    (an empty requirement_relationships table)."""
+    (an empty requirement_relationships table).
+
+    ``contradiction_check_skipped`` persists whether THIS attempt actually
+    ran the LLM contradiction check or silently skipped it (LLM
+    unreachable) -- without this, "0 contradictions" on screen after a
+    page reload is indistinguishable from "contradiction detection never
+    actually ran", the exact same kind of silent-failure-looks-like-a-
+    clean-result trap the other two fields exist to prevent.
+    """
     conn.execute(
-        "UPDATE runs SET consistency_analyzed_at = ?, consistency_last_error = ? WHERE id = ?",
-        (_utcnow(), error, run_id),
+        "UPDATE runs SET consistency_analyzed_at = ?, consistency_last_error = ?, "
+        "consistency_contradiction_check_skipped = ? WHERE id = ?",
+        (_utcnow(), error, 1 if contradiction_check_skipped else 0, run_id),
     )
     conn.commit()
 
