@@ -92,8 +92,8 @@ export default function ConsistencyPage() {
   // and just skips contradiction checking -- this banner is how that gets
   // surfaced, instead of it silently under-reporting contradictions.
   const [lastMessage, setLastMessage] = useState<{ text: string; isWarning: boolean } | null>(null);
-  const RELATED_PAGE_SIZE = 5;
-  const [relatedShownCount, setRelatedShownCount] = useState(RELATED_PAGE_SIZE);
+  const RELATED_PAGE_SIZE = 10;
+  const [relatedPage, setRelatedPage] = useState(0); // 0-indexed
 
   const {
     data: consistencyData,
@@ -123,11 +123,12 @@ export default function ConsistencyPage() {
     return map;
   }, [matrixData]);
 
-  // Collapse the "Related Requirements" list back to the first page
-  // whenever the active run changes -- otherwise an expanded count from
-  // a previous, larger run would carry over.
+  // Reset the "Related Requirements" list back to page 1 whenever the
+  // active run changes -- otherwise a page number from a previous,
+  // larger run would carry over and could point past the end of a
+  // smaller one.
   useEffect(() => {
-    setRelatedShownCount(RELATED_PAGE_SIZE);
+    setRelatedPage(0);
   }, [activeRunId]);
 
   const handleReanalyze = async () => {
@@ -604,7 +605,7 @@ export default function ConsistencyPage() {
           </div>
 
           <div className="space-y-4">
-            {relationships.slice(0, relatedShownCount).map((rel) => {
+            {relationships.slice(relatedPage * RELATED_PAGE_SIZE, (relatedPage + 1) * RELATED_PAGE_SIZE).map((rel) => {
               const badge = getRelationshipBadge(rel.relationship_type);
               const Icon = badge.icon;
               
@@ -654,42 +655,37 @@ export default function ConsistencyPage() {
             })}
           </div>
           
-          {relationships.length > RELATED_PAGE_SIZE && (
-            <div className="pt-4 flex flex-col items-center gap-2 text-xs text-[#8FA3BF]">
-              <span>
-                Showing {Math.min(relatedShownCount, relationships.length)} of {relationships.length}{" "}
-                relationships
-              </span>
-              <div className="flex items-center gap-3">
-                {relatedShownCount < relationships.length && (
+          {relationships.length > RELATED_PAGE_SIZE && (() => {
+            const totalPages = Math.ceil(relationships.length / RELATED_PAGE_SIZE);
+            const rangeStart = relatedPage * RELATED_PAGE_SIZE + 1;
+            const rangeEnd = Math.min((relatedPage + 1) * RELATED_PAGE_SIZE, relationships.length);
+            return (
+              <div className="pt-4 flex items-center justify-between text-xs text-[#8FA3BF]">
+                <span>
+                  Showing {rangeStart}-{rangeEnd} of {relationships.length} relationships
+                </span>
+                <div className="flex items-center gap-3">
                   <button
-                    onClick={() =>
-                      setRelatedShownCount((count) => Math.min(count + RELATED_PAGE_SIZE, relationships.length))
-                    }
-                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition"
+                    onClick={() => setRelatedPage((p) => Math.max(p - 1, 0))}
+                    disabled={relatedPage === 0}
+                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[#243244]"
                   >
-                    Show {Math.min(RELATED_PAGE_SIZE, relationships.length - relatedShownCount)} more
+                    Previous
                   </button>
-                )}
-                {relatedShownCount < relationships.length && (
+                  <span className="font-mono">
+                    Page {relatedPage + 1} of {totalPages}
+                  </span>
                   <button
-                    onClick={() => setRelatedShownCount(relationships.length)}
-                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition"
+                    onClick={() => setRelatedPage((p) => Math.min(p + 1, totalPages - 1))}
+                    disabled={relatedPage >= totalPages - 1}
+                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[#243244]"
                   >
-                    Show all {relationships.length}
+                    Next
                   </button>
-                )}
-                {relatedShownCount > RELATED_PAGE_SIZE && (
-                  <button
-                    onClick={() => setRelatedShownCount(RELATED_PAGE_SIZE)}
-                    className="px-3 py-1.5 rounded-lg bg-transparent hover:text-[#F5F7FA] transition"
-                  >
-                    Collapse
-                  </button>
-                )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </motion.div>
       )}
     </div>
