@@ -326,29 +326,29 @@ class ConsistencyAnalyzer:
         similarity: float,
     ) -> RequirementRelationship:
         """Classify the relationship between two requirement texts.
-        
+
+        Order matters here, and it's deliberately NOT "duplicate first,
+        then check contradiction for what's left": a contradiction pair
+        (same subject, one word flipped -- e.g. "shall enable X" vs
+        "shall not enable X") is often textually so close it clears
+        duplicate_threshold too. If duplicate were checked first, every
+        such pair would be mislabeled "Duplicate" and the contradiction
+        check would never even run on it -- silently hiding the more
+        serious defect (two requirements that actively conflict) behind
+        the more benign one (near-identical wording). So: any pair that
+        clears similarity_threshold gets the contradiction check FIRST,
+        regardless of how high its similarity is; only once that comes
+        back negative (or can't be checked) does duplicate-vs-similar
+        get decided.
+
         Args:
             text1: First requirement text
             text2: Second requirement text
             similarity: Cosine similarity score
-            
+
         Returns:
             RequirementRelationship with classification
         """
-        # High similarity - likely duplicate
-        if similarity >= self.duplicate_threshold:
-            return RequirementRelationship(
-                req_id_1=0,  # Will be set by caller
-                req_id_2=0,  # Will be set by caller
-                relationship_type=RelationshipType.DUPLICATE,
-                similarity_score=similarity,
-                confidence=similarity,
-                reason="Very high semantic similarity indicates duplicate requirement.",
-            )
-
-        # Medium similarity - check for contradiction if enabled and the
-        # LLM is actually reachable (checked once per run, not per pair --
-        # see _is_llm_reachable()).
         if similarity >= self.similarity_threshold:
             if self.enable_contradiction_check and self._is_llm_reachable():
                 is_contradiction, reason = self._check_contradiction(text1, text2)
@@ -361,7 +361,17 @@ class ConsistencyAnalyzer:
                         confidence=0.9,  # High confidence from LLM verification
                         reason=reason,
                     )
-            
+
+            if similarity >= self.duplicate_threshold:
+                return RequirementRelationship(
+                    req_id_1=0,  # Will be set by caller
+                    req_id_2=0,  # Will be set by caller
+                    relationship_type=RelationshipType.DUPLICATE,
+                    similarity_score=similarity,
+                    confidence=similarity,
+                    reason="Very high semantic similarity indicates duplicate requirement.",
+                )
+
             return RequirementRelationship(
                 req_id_1=0,
                 req_id_2=0,
