@@ -62,8 +62,18 @@ pipeline:
 consistency:
   # Threshold for marking requirements as duplicates (0.0-1.0)
   duplicate_threshold: 0.95
-  # Threshold for marking requirements as similar (0.0-1.0)
-  similarity_threshold: 0.80
+  # Floor above which a pair is even CONSIDERED for "similar" or sent to
+  # the LLM for a contradiction check (0.0-1.0) -- below this, a pair is
+  # auto-labeled "independent" and the LLM is never asked. Was 0.80, which
+  # is too strict for a common contradiction pattern: same sentence with
+  # one action word flipped (e.g. "shall enable X" vs "shall disable X")
+  # -- measured at ~0.75 under this project's TF-IDF fallback, so those
+  # pairs were being auto-dismissed as independent without the LLM ever
+  # getting a chance to flag the contradiction. Lowered to catch those;
+  # this doesn't add false positives on its own -- the LLM still has to
+  # actually confirm a contradiction, this threshold only controls which
+  # pairs get asked.
+  similarity_threshold: 0.65
   # Sentence transformer model for embeddings (offline, local)
   # Falls back to TF-IDF if sentence-transformers is unavailable
   embedding_model: "all-MiniLM-L6-v2"
