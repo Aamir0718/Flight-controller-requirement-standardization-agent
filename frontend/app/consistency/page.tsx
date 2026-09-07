@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiService } from "@/services/api";
 import { useActiveRun } from "@/context/ActiveRunContext";
 import { motion } from "framer-motion";
@@ -92,6 +92,8 @@ export default function ConsistencyPage() {
   // and just skips contradiction checking -- this banner is how that gets
   // surfaced, instead of it silently under-reporting contradictions.
   const [lastMessage, setLastMessage] = useState<{ text: string; isWarning: boolean } | null>(null);
+  const RELATED_PAGE_SIZE = 5;
+  const [relatedShownCount, setRelatedShownCount] = useState(RELATED_PAGE_SIZE);
 
   const {
     data: consistencyData,
@@ -120,6 +122,13 @@ export default function ConsistencyPage() {
     }
     return map;
   }, [matrixData]);
+
+  // Collapse the "Related Requirements" list back to the first page
+  // whenever the active run changes -- otherwise an expanded count from
+  // a previous, larger run would carry over.
+  useEffect(() => {
+    setRelatedShownCount(RELATED_PAGE_SIZE);
+  }, [activeRunId]);
 
   const handleReanalyze = async () => {
     if (!activeRunId) return;
@@ -595,7 +604,7 @@ export default function ConsistencyPage() {
           </div>
 
           <div className="space-y-4">
-            {relationships.slice(0, 5).map((rel) => {
+            {relationships.slice(0, relatedShownCount).map((rel) => {
               const badge = getRelationshipBadge(rel.relationship_type);
               const Icon = badge.icon;
               
@@ -645,9 +654,40 @@ export default function ConsistencyPage() {
             })}
           </div>
           
-          {relationships.length > 5 && (
-            <div className="pt-4 text-center text-xs text-[#8FA3BF]">
-              Showing 5 of {relationships.length} relationships
+          {relationships.length > RELATED_PAGE_SIZE && (
+            <div className="pt-4 flex flex-col items-center gap-2 text-xs text-[#8FA3BF]">
+              <span>
+                Showing {Math.min(relatedShownCount, relationships.length)} of {relationships.length}{" "}
+                relationships
+              </span>
+              <div className="flex items-center gap-3">
+                {relatedShownCount < relationships.length && (
+                  <button
+                    onClick={() =>
+                      setRelatedShownCount((count) => Math.min(count + RELATED_PAGE_SIZE, relationships.length))
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition"
+                  >
+                    Show {Math.min(RELATED_PAGE_SIZE, relationships.length - relatedShownCount)} more
+                  </button>
+                )}
+                {relatedShownCount < relationships.length && (
+                  <button
+                    onClick={() => setRelatedShownCount(relationships.length)}
+                    className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#243244] hover:border-[#1EA7FF]/40 text-[#1EA7FF] font-semibold transition"
+                  >
+                    Show all {relationships.length}
+                  </button>
+                )}
+                {relatedShownCount > RELATED_PAGE_SIZE && (
+                  <button
+                    onClick={() => setRelatedShownCount(RELATED_PAGE_SIZE)}
+                    className="px-3 py-1.5 rounded-lg bg-transparent hover:text-[#F5F7FA] transition"
+                  >
+                    Collapse
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </motion.div>

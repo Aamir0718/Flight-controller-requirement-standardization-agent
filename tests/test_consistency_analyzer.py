@@ -156,6 +156,48 @@ class TestLlmReachable:
         assert len(result.relationships) == 1
         assert result.relationships[0].relationship_type == RelationshipType.CONTRADICTION
 
+    def test_a_confirmed_contradiction_wins_even_above_duplicate_threshold(self):
+        # The regression this guards against: a contradiction pair (same
+        # sentence, one word flipped -- "shall switch" vs "shall not
+        # switch") is often textually so close it clears
+        # duplicate_threshold too. Classifying duplicate BEFORE checking
+        # contradiction would mislabel it "Duplicate" and never even ask
+        # the LLM -- silently hiding the more serious defect behind the
+        # more benign one. Real duplicate_threshold (0.95) here, on purpose.
+        analyzer = _analyzer(
+            settings={
+                "consistency": {
+                    "duplicate_threshold": 0.95,
+                    "similarity_threshold": 0.5,
+                    "enable_contradiction_check": True,
+                }
+            }
+        )
+        analyzer._llm_client = _FakeReachableClient(is_contradiction=True)
+
+        # Verified (see git history/commit message) to score ~0.956 under
+        # this project's TF-IDF fallback -- comfortably above the 0.95
+        # duplicate_threshold configured above, on purpose.
+        text_high_similarity = (
+            "The flight control computer shall log every parameter change event to the "
+            "persistent flight data recorder for post-flight analysis."
+        )
+        text_negated = (
+            "The flight control computer shall not log every parameter change event to the "
+            "persistent flight data recorder for post-flight analysis."
+        )
+        result = analyzer.analyze_requirements(
+            run_id=1,
+            requirements=[
+                {"id": 1, "recommended_text": text_high_similarity},
+                {"id": 2, "recommended_text": text_negated},
+            ],
+        )
+        assert len(result.relationships) == 1
+        rel = result.relationships[0]
+        assert rel.similarity_score >= 0.95  # confirms this pair really does clear duplicate_threshold
+        assert rel.relationship_type == RelationshipType.CONTRADICTION
+
 
 class TestContradictionCheckDisabled:
     def test_disabled_in_config_never_touches_the_llm_and_is_not_reported_as_skipped(self):
